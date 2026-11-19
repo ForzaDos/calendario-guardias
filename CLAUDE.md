@@ -1,0 +1,49 @@
+# Calendario de guardias — notas de desarrollo
+
+Usuarios finales: personal de un sanatorio sin conocimientos de computación. Los textos de la interfaz van en español rioplatense, simples y calmos (sin «Error/Atención», sin jerga técnica, diciendo qué hacer). Al agregar mensajes nuevos mantener ese criterio; el detalle técnico va a un archivo de registro, no a la pantalla.
+
+## Qué es
+Calendario interactivo de guardias médicas. Archivo único: `guardias.html` (HTML + CSS + JS, sin framework ni dependencias). Funciona abriéndolo directo en el navegador (datos en `localStorage`) o servido por `servidor.py` (modo servidor con usuarios y base SQLite).
+
+## Reglas del negocio
+- **Plantas** sin límite, renombrables. Cada una elige sus turnos: 24 h (08:00 a 08:00), 12 h día (08–20) y 12 h noche (20–08), en cualquier combinación.
+- **Descansos** entre todas las plantas: por defecto 24 h libres después de una guardia de 24 h y 12 h después de una de 12 h. Un médico no puede estar en dos turnos que se pisen.
+- **Una guardia cuenta como 24 h**: dos de 12 h = 1 guardia; los equivalentes se muestran con medias (6,5).
+- **Dividir una guardia de 24 h** en mitad día (08–20) y mitad noche (20–08) con médicos distintos: tipos `h24d`/`h24n` (sids `P.h24d`, `P.h24n`, fuera de `plant.types`), marca `S.splits['YYYY-MM-DD|P.h24']`. Cada mitad vale 12 h y 0,5 guardia; si el mismo médico queda en las dos mitades se juntan solas. El reparto automático no toca los días divididos.
+- **Médicos**: `name` más `first`, `last`, `phone`, `mat`, `email` opcionales; activos/inactivos (`active===false` = inactivo: conserva historial pero no recibe guardias nuevas).
+- **El administrador puede editar todo**, incluso turnos en curso o pasados. Solo hay confirmaciones al borrar algo con historia (quitar una planta, un tipo de turno o un médico con guardias cargadas).
+- **Facturación — lo hecho manda**: el reporte sale solo de lo asignado; los objetivos son una estimación y nunca cambian lo asignado ni lo impreso. Filtros: «Todos»; «Solo 24 h» (24 h completas; los días divididos salen como «DIVIDIDA» y el resumen avisa cuántas mitades quedaron afuera); «Solo 12 h» (12 h día/noche + mitades). 24 h + 12 h = Todos, siempre. El resumen desglosa 24 h / 12 h día / 12 h noche / mitad día / mitad noche. Al imprimir con la marca de agua «VERSION FINAL PARA FACTURACION» se muestra un aviso con los turnos sin médico y los avisos de Control pendientes.
+- **Reparto automático**: objetivos por médico y mes (por planta y turno, con medias; total del mes; máximo de fines de semana), fijos semanales, disponibilidad por día, turnos/días/plantas permitidos, cambios manuales con candado, intercambio arrastrando, cambio por bloque, anular días, limpiar mes (con la opción de conservar los fijados), «Control» con excepciones aceptadas, Totales, modo claro/oscuro. Impresión siempre en blanco y negro, A4 horizontal.
+
+## Arquitectura de `guardias.html`
+- `//<core>…//</core>`: lógica pura (sin DOM), probada con Node.
+- `//<ui>…//</ui>`: interfaz; `render()` regenera `#app` con `innerHTML`; eventos por delegación.
+- Estado `S`: `plants[{id,name,types}]`, `doctors`, `assign[fecha][sid]`, `locks['fecha|sid']`, `splits`, `rules[{doc,dow,sid}]`, `quotas['YYYY-MM'][docId]`, `allow`, `unavail`, `closed`, `ignored`, `rest24`, `rest12`, `seed`.
+- Un turno se identifica con `sid = "<planta>.<tipo>"` (`1.h24`, `2.n12`…).
+- `generate()` (reparto voraz + mejora local con semilla), `conflictInfo()` (descansos y solapes), `computeStats()`, `migrate()` (datos de versiones anteriores).
+- Estilos con tokens CSS (`--surface`, `--ink`, `--accent`…), tema claro/oscuro; los estilos de pantalla no tocan la impresión.
+
+## Servidor (`servidor.py`)
+Biblioteca estándar de Python + SQLite (`datos/guardias.db`; tablas `users`, `sessions`, `versions`, `audit`, `settings`). API JSON en `/api/`: usuarios (admin/editor, contraseñas `scrypt`), guardado con versiones (`PUT /api/state` con `base_version`, 409 si otro guardó), historial con restauración, respaldos atómicos diarios, exportar JSON/base, `POST /api/wipe` (borrar datos con contraseña), `GET/POST /api/share` (escuchar en la red para que otras personas entren), `GET /api/update` (aviso de versión nueva, solo avisa), `/guias/*.pdf`. Defensas: CSRF (`Origin` + `X-Requested-With`), lista de `Host`, límite de intentos, tope de cuerpo, CSP. El primer administrador solo se crea desde la propia PC. `config.json` se genera solo (host/puerto…).
+
+## Grupo: trabajar desde distintas casas (versión 1.1.0)
+Varias personas (hasta 5), cada una con su propio programa y su propia base, editan el **mismo calendario**. No hay un servidor central: se sincronizan a través de un **buzón cifrado** (`buzon/`, un Cloudflare Worker + base D1) que solo guarda bloques cifrados y no puede leer nada.
+- **Núcleo** (`guardias.html`, `//<core>`): `flat/unflat/fdiff/fapply` (el estado se aplana en «hojas» clave→valor y cada cambio es un parche), `syncRebase` (combinación de 3 vías: base / mío / suyo; si dos tocan lo mismo queda lo último, y lo manual le gana a lo automático), `syncNormalize` (deja coherente: sin médicos ni candados huérfanos, sin guardias en días anulados), `syncSeal/syncOpen` (AES-GCM + gzip, el encabezado grupo/época/tipo/número va como dato autenticado) y `syncRound` (una ronda: baja lo nuevo, combina, sube la foto completa si cambió algo). No se sincronizan `month`, `year`, `seed`, los contadores ni las excepciones aceptadas en Control (`ignored`). Los médicos y plantas nuevos usan ids al azar (`newId`) para que dos altas sin conexión no choquen.
+- **Buzón** (`buzon/worker.js`, `schema.sql`): invitaciones de un solo uso (48 h), roles `owner/admin/member`, máximo 5 personas, el registro conserva solo la última foto, agregar es condicional (409 si alguien se adelantó), quitar a alguien corta su acceso al instante. Guía para publicarlo: `buzon/GUIA-CLOUDFLARE.md`; el primer grupo se crea con `buzon/crear-grupo.py`.
+- **Motor**: `GET/PUT /api/grupo`, `POST /api/grupo/salir`, `POST /api/buzon` (reenvía al buzón solo rutas conocidas; la URL sale de `buzon.json` junto al motor, que no se versiona; solo administrador y solo desde la propia PC) y `grupo_meta` dentro de `PUT /api/state` (el punto de sincronización `base/seen` se guarda en la misma operación que el estado). Estando en un grupo se bloquean borrar todo, cargar un archivo, restaurar versiones y «Compartir en red».
+- **Página**: la ronda corre en la página cada 3 s con la ventana a la vista (1 min si está oculta); chip «Al día con el grupo» arriba; tarjeta «Grupo» en Administración (unirse, invitar, lista de personas con «Sacar del grupo», salir). Sacar a alguien corta su acceso pero no cambia la clave de cifrado.
+- Pruebas: `tests/08-sincronizar.js`, `09-buzon.js`, `10-ronda-de-sincronizacion.js` (node) y `tests/servidor-grupo.py` (motor, opcionalmente contra un buzón real local con `wrangler dev`).
+
+## Empaquetado (`empaquetado/`)
+- `host/Program.cs`: ventana de escritorio (WinForms + WebView2): instancia única, arranca su propio motor con un token, cierre ordenado con respaldo, el motor muere si cae la ventana.
+- `build.ps1` arma el motor (PyInstaller) + la ventana + el MSI (WiX) + las guías en PDF; `crear-instalador-exe.ps1` genera el instalador de **un solo archivo** (`Instalar-Calendario-Guardias-<versión>.exe`) con el MSI adentro y `dist/version.json`. Ver `empaquetado/README.md`.
+- La versión sale de `empaquetado/VERSION` (y `APP_VERSION` en `guardias.html`); `empaquetado/NOVEDADES.txt` lleva la frase de novedades.
+- **Aviso de versión nueva**: el servidor consulta un `version.json` público (`{"version":"1.0.3","novedades":"..."}`). Dónde mirar se define en `actualizaciones.json` junto al motor (no se versiona; copiá `empaquetado/actualizaciones.ejemplo.json`) con `url_version` y `url_descarga`. Solo avisa, nunca instala.
+- Los datos viven en `{app}\motor\datos` y el desinstalador los conserva; el instalador hace una copia de la base antes de actualizar.
+- `empaquetado/buzon.json` (dirección del buzón; copiá `buzon.ejemplo.json`, no se versiona) se incluye en el motor al compilar si existe. La versión del MSI sale de `VERSION` (`-d AppVersion=…`): si fuera menor o igual a la instalada, Windows rechazaría la actualización.
+- Aviso de versión nueva en la página: barra grande arriba y, una vez por sesión y versión, un cartel en el centro de la pantalla.
+
+## Pruebas
+- Lógica: `node tests/run.js` (extrae el núcleo de `guardias.html` y corre `tests/NN-*.js`).
+- Interfaz: Chrome headless (`--screenshot`, `--print-to-pdf`, `--dump-dom` con scripts inyectados) para revisar ambos modos y la impresión.
+- Servidor: levantar una copia en otra carpeta y otro puerto y usar la API; nunca probar sobre `datos/` reales.
