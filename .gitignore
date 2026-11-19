@@ -1,0 +1,47 @@
+# ------------------------------------------------------------ datos locales
+# Base SQLite del servidor, respaldos diarios y todo lo que genere en ejecucion.
+# servidor.py crea la carpeta solo (DATA_DIR.mkdir), asi que un clon limpio anda
+# igual: la base arranca vacia.
+datos/
+
+# ---------------------------------------------------------- basura de Python
+__pycache__/
+*.py[cod]
+
+# ------------------------------------------- temporales de editores y de Windows
+*.swp
+*~
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ------------------------------------------------- entregables y build (Windows)
+# El instalador y la guía se generan con empaquetado\build.ps1 y no van al repo
+# (60 MB); se pasan aparte al que los va a usar.
+dist/
+empaquetado/app/
+empaquetado/build/
+empaquetado/tools/
+empaquetado/.venv/
+empaquetado/.nuget/
+empaquetado/.dotnet_home/
+empaquetado/.appdata/
+empaquetado/.tmp*/
+empaquetado/host/bin/
+empaquetado/host/obj/
+empaquetado/installer/
+empaquetado/*.spec
+empaquetado/*.log
+
+# demo para probar en el celular (datos de prueba y credenciales)
+demo/
+
+# dónde buscar versiones nuevas (enlaces propios; no va al repo)
+empaquetado/actualizaciones.json
+
+# configuracion local de NuGet (herramientas de armado)
+empaquetado/nuget.config
+
+# direccion del buzon del grupo (es de cada instalacion; no va al repositorio)
+empaquetado/buzon.json
+buzon.json
