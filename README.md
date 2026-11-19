@@ -17,7 +17,8 @@
 - **Totales** por médico: horas, guardias equivalentes a 24 h, fines de semana.
 - **Cambios a mano** con candado, intercambio arrastrando, deshacer, anular días, cambio por bloque y limpiar el mes (con la opción de conservar los turnos fijados).
 - **Impresión / PDF para facturación**: por planta, por turno, por período, en formato calendario o lista global, con resumen por médico y **marca de agua «VERSION FINAL PARA FACTURACION»**. El reporte sale solo de lo realmente cargado.
-- **Trabajo en grupo (hasta 5 personas, cada una desde su casa):** cada una usa su propio programa y los cambios se pasan solos entre todas, cifrados, a través de un buzón propio en Cloudflare (gratis). Sin conexión se sigue trabajando y se pone al día al volver. La administradora invita con un código de un solo uso y puede sacar a alguien del grupo.
+- **Trabajo en grupo (hasta 5 personas, cada una desde su casa):** cada una usa su propio programa y los cambios se pasan solos entre todas, cifrados, a través de un buzón propio en Cloudflare (gratis). Sin conexión se sigue trabajando y se pone al día al volver. La primera persona crea el grupo con un botón; invita por WhatsApp con un mensaje listo (código de un solo uso) y puede sacar a alguien del grupo.
+- **Actualización con un clic**: el programa avisa cuando hay una versión nueva (cartel grande) y, con «Actualizar ahora», la baja (verifica su huella SHA-256), se cierra guardando todo, se actualiza y se vuelve a abrir solo, sin tocar los datos.
 - **Modo claro y oscuro**, y funciona también en el celular.
 
 | Médicos y objetivos | Impresión con marca de agua |
@@ -37,12 +38,10 @@ Hay tres formas, de la más simple a la más completa:
    ```bash
    python servidor.py        # o iniciar.bat en Windows
    ```
-   Abre `http://localhost:8080`. La primera vez pide crear el **administrador**. Incluye usuarios (administrador / editor), historial de versiones con restauración, respaldo diario automático, aviso cuando dos personas editan a la vez, exportar la base y los calendarios, y un menú para **compartir con otras personas de la misma red** (entran con usuario y contraseña desde su navegador o su celular).
+   Abre `http://localhost:8080`. La primera vez pide crear el **administrador**. Incluye la cuenta del administrador de cada computadora, historial de versiones con restauración, respaldo diario automático, aviso cuando dos personas editan a la vez, exportar la base y los calendarios.
 3. **Instalador de Windows de un solo archivo (`.exe`).** Lleva todo adentro (ventana propia con WebView2, motor y base SQLite) y se instala sin permisos de administrador. Ver [`empaquetado/README.md`](empaquetado/README.md) para armarlo.
 
 Las guías para quien lo usa están en `empaquetado/guia/` (HTML) y como PDF en [`docs/`](docs/): [guía de instalación](docs/Guia-instalacion.pdf) y [guía de uso](docs/Guia-uso.pdf).
-
-![Compartir con otras personas](docs/img/adm.png)
 
 ## Cómo está hecho
 
@@ -60,7 +59,7 @@ Más detalles de las reglas del negocio y de la arquitectura en [`CLAUDE.md`](CL
 
 - Por defecto no usa servicios externos: los datos del calendario (médicos, guardias, usuarios) quedan en la computadora donde corre.
 - **Modo grupo (opcional):** los cambios viajan **cifrados de punta a punta** (AES-GCM; la clave nunca pasa por el buzón) a un buzón que publicás vos en tu propia cuenta de Cloudflare. El buzón solo ve quién escribió, cuándo y cuánto pesa cada envío. Sacar a una persona del grupo corta su acceso al instante, pero no cambia la clave de cifrado ni borra lo que ya tenía en su computadora.
-- Al compartir en la red, las contraseñas viajan sin cifrar (**HTTP**): es para redes internas de confianza, no para internet abierta. «Compartir en red» y «Grupo» no se usan a la vez.
+- El programa local escucha **solo en la propia computadora** (127.0.0.1), nunca en la red. Para trabajar entre varias computadoras se usa el Grupo (cifrado de punta a punta).
 - Los datos de ejemplo (nombres de médicos) son ficticios.
 
 ## Pruebas

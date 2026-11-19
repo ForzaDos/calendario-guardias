@@ -39,12 +39,13 @@ cd empaquetado
 
 El resultado queda en `dist\`.
 
-## Aviso de versión nueva (opcional)
+## Aviso de versión nueva y actualización con un clic (opcional)
 
-El programa puede avisarle al administrador cuando hay una versión más nueva. Solo avisa: nunca descarga ni instala nada solo.
+El programa puede avisarle al administrador cuando hay una versión más nueva (cartel grande + barra) y actualizarse con un clic en «Actualizar ahora»: baja el instalador, cierra el calendario guardando todo, lo actualiza y lo vuelve a abrir solo. Nunca hace nada sin que la persona lo pida.
 
-1. Copiá `actualizaciones.ejemplo.json` a `actualizaciones.json` y poné `url_version` (enlace público a un `version.json`) y `url_descarga` (dónde se baja el instalador). Se incluye en el motor al compilar.
-2. En cada entrega, `crear-instalador-exe.ps1` genera `dist\version.json` con el número de `VERSION` y la frase de `NOVEDADES.txt`. Publicá el instalador nuevo y ese archivo (en el mismo lugar, para que los enlaces no cambien).
+1. Copiá `actualizaciones.ejemplo.json` a `actualizaciones.json` (no se versiona; se incluye en el motor al compilar) y poné: `url_version` (enlace público a un `version.json`), `url_descarga` (dónde se baja el instalador a mano) y `url_instalador` (enlace de compartir del archivo del instalador en Google Drive; de ahí sale el id para bajarlo solo).
+2. En cada entrega, `crear-instalador-exe.ps1` genera `dist\version.json` con la versión de `VERSION`, la frase de `NOVEDADES.txt` y el `sha256` y `bytes` del instalador. Publicá **primero el instalador** y **después** `version.json` (en el mismo lugar, para que los enlaces no cambien: en Drive, «Administrar versiones» → «Subir versión nueva»).
+3. Las instalaciones anteriores a esta función se actualizan una vez a mano; desde ahí es con un clic.
 
 ## Detalles que importan
 

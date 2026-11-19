@@ -17,14 +17,51 @@ namespace InstaladorCalendario
     {
         const string Titulo = "Calendario de guardias";
 
+        static string Raiz()
+        {
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Programs\CalendarioGuardias");
+        }
+
+        /// <summary>¿Hay un calendario o un motor abierto? Con `soloInstalado`, solo cuenta el de la carpeta instalada (no cualquier «motor»).</summary>
+        static bool HayAbierto(bool soloInstalado)
+        {
+            string raiz = Raiz();
+            foreach (string nombre in new[] { "CalendarioGuardias", "motor" })
+                foreach (Process p in Process.GetProcessesByName(nombre))
+                {
+                    if (!soloInstalado) return true;
+                    try { if (p.MainModule.FileName.StartsWith(raiz, StringComparison.OrdinalIgnoreCase)) return true; } catch { }
+                }
+            return false;
+        }
+
+        static void CerrarRestos()
+        {
+            string raiz = Raiz();
+            foreach (string nombre in new[] { "CalendarioGuardias", "motor" })
+                foreach (Process p in Process.GetProcessesByName(nombre))
+                    try { if (p.MainModule.FileName.StartsWith(raiz, StringComparison.OrdinalIgnoreCase)) p.Kill(); } catch { }
+        }
+
         [STAThread]
-        static int Main()
+        static int Main(string[] args)
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
+            // «/actualizar <pid>»: lo lanza la ventana del calendario al elegir «Cerrar y actualizar». Espera a que esa ventana termine
+            // (ya guardó todo y apagó el motor) y SIEMPRE vuelve a abrir el programa al final (el nuevo, o el viejo si algo falló).
+            bool actualizar = args.Length > 0 && args[0].Equals("/actualizar", StringComparison.OrdinalIgnoreCase);
+            if (actualizar)
+            {
+                int pid;
+                if (args.Length > 1 && int.TryParse(args[1], out pid))
+                    try { Process.GetProcessById(pid).WaitForExit(30000); } catch { }
+                for (int i = 0; i < 30 && HayAbierto(true); i++) Thread.Sleep(500);
+                CerrarRestos();
+            }
             // Si el calendario está abierto, hay que cerrarlo antes (si no, Windows no puede reemplazar sus archivos).
-            if (Process.GetProcessesByName("CalendarioGuardias").Length > 0 || Process.GetProcessesByName("motor").Length > 0)
+            else if (HayAbierto(false))
             {
                 MessageBox.Show("El calendario está abierto.\n\nCerralo y volvé a abrir este instalador.",
                     Titulo, MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -65,7 +102,8 @@ namespace InstaladorCalendario
                 f.BackColor = Color.White;
                 try { f.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
                 Label l = new Label();
-                l.Text = "Instalando el Calendario de guardias...\n\nEsto tarda unos segundos. No cierres esta ventana.";
+                l.Text = (actualizar ? "Actualizando el Calendario de guardias...\n\nSe vuelve a abrir solo al terminar. No cierres esta ventana."
+                                     : "Instalando el Calendario de guardias...\n\nEsto tarda unos segundos. No cierres esta ventana.");
                 l.Left = 20; l.Top = 18; l.Width = 380; l.Height = 60;
                 l.Font = new Font("Segoe UI", 10f);
                 ProgressBar pb = new ProgressBar();
@@ -84,10 +122,15 @@ namespace InstaladorCalendario
                             byte[] buf = new byte[1 << 20]; int n;
                             while ((n = s.Read(buf, 0, buf.Length)) > 0) o.Write(buf, 0, n);
                         }
-                        ProcessStartInfo psi = new ProcessStartInfo("msiexec.exe",
-                            "/i \"" + msi + "\" /qn /norestart /l*v \"" + log + "\"");
-                        psi.UseShellExecute = false; psi.CreateNoWindow = true;
-                        using (Process p = Process.Start(psi)) { p.WaitForExit(); codigo = p.ExitCode; }
+                        for (int intento = 0; intento < 4; intento++)
+                        {
+                            ProcessStartInfo psi = new ProcessStartInfo("msiexec.exe",
+                                "/i \"" + msi + "\" /qn /norestart /l*v \"" + log + "\"");
+                            psi.UseShellExecute = false; psi.CreateNoWindow = true;
+                            using (Process p = Process.Start(psi)) { p.WaitForExit(); codigo = p.ExitCode; }
+                            if (codigo != 1618) break;      // 1618 = Windows está haciendo otra instalación: se espera y se reintenta
+                            Thread.Sleep(10000);
+                        }
                     }
                     catch (Exception ex) { detalle = ex.Message; }
                     f.BeginInvoke((MethodInvoker)delegate { f.Close(); });
@@ -104,7 +147,7 @@ namespace InstaladorCalendario
                 // abrir el programa recién instalado: él muestra el aviso de "instalado" y crea el acceso del Escritorio
                 string exe = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                     @"Programs\CalendarioGuardias\app\CalendarioGuardias.exe");
-                try { Process.Start(new ProcessStartInfo(exe, "--instalado") { UseShellExecute = false }); }
+                try { Process.Start(new ProcessStartInfo(exe, actualizar ? "--actualizado" : "--instalado") { UseShellExecute = false }); }
                 catch
                 {
                     MessageBox.Show("El Calendario de guardias quedó instalado.\n\nPara abrirlo, usá el acceso directo «Calendario de guardias» del Menú Inicio.",
@@ -113,6 +156,15 @@ namespace InstaladorCalendario
                 return 0;
             }
 
+            if (actualizar)
+            {
+                // algo falló: el programa viejo sigue instalado (Windows deshace lo que alcanzó a cambiar); se lo vuelve a abrir
+                string viejo = Path.Combine(Raiz(), @"app\CalendarioGuardias.exe");
+                try { if (File.Exists(viejo)) Process.Start(new ProcessStartInfo(viejo) { UseShellExecute = false }); } catch { }
+                MessageBox.Show("No se pudo actualizar el calendario.\n\nTu calendario sigue como estaba y tus datos están a salvo. Probá de nuevo más tarde o avisale a quien te lo instaló.",
+                    Titulo, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return 1;
+            }
             MessageBox.Show("No se pudo instalar el calendario.\n\nProbá de nuevo. Si sigue igual, avisale a quien te pasó este programa.",
                 Titulo, MessageBoxButtons.OK, MessageBoxIcon.Information);
             return 1;

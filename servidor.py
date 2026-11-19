@@ -6,8 +6,7 @@ Servidor local del calendario de guardias.
 - Solo usa la biblioteca estándar de Python (sin instalar nada).
 - Guarda todo en una base SQLite (datos/guardias.db): usuarios, sesiones, versiones del calendario y auditoría.
 - Sirve guardias.html y una API JSON bajo /api/.
-- Por defecto escucha SOLO en esta PC (127.0.0.1:8080). Para usarlo desde otras PCs de la red,
-  cambiar "host" a "0.0.0.0" en config.json (ver plan.md).
+- Escucha SOLO en esta PC (127.0.0.1:8080), nunca en la red: las demás personas trabajan con el Grupo (buzón cifrado).
 
 Uso:  python servidor.py          (o doble clic en iniciar.bat)
 """
@@ -31,6 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 import urllib.error
+import urllib.parse
 import urllib.request
 
 # ------------------------------------------------------------------ rutas
@@ -57,7 +57,6 @@ DB_PATH = DATA_DIR / "guardias.db"
 CONFIG_PATH = WORK_DIR / "config.json"
 
 DEFAULT_CONFIG = {
-    "host": "127.0.0.1",
     "port": 8080,
     "abrir_navegador": True,
     "sesion_horas": 12,
@@ -98,7 +97,7 @@ def load_config():
     cfg = dict(DEFAULT_CONFIG)
     if CONFIG_PATH.exists():
         try:
-            cfg.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
+            cfg.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig")))
         except Exception as e:  # config rota: avisar y seguir con los valores por defecto
             say("AVISO: no pude leer config.json (%s). Uso los valores por defecto." % e)
     else:
@@ -116,15 +115,12 @@ CFG = load_config()
 # el servidor al que se conecta es el suyo, y puede pedirle un apagado ordenado.
 if os.environ.get("GUARDIAS_PORT", "").isdigit():
     CFG["port"] = int(os.environ["GUARDIAS_PORT"])
-if os.environ.get("GUARDIAS_HOST"):
-    CFG["host"] = os.environ["GUARDIAS_HOST"]
 if os.environ.get("GUARDIAS_SIN_NAVEGADOR"):
     CFG["abrir_navegador"] = False
 INSTANCE_TOKEN = os.environ.get("GUARDIAS_TOKEN", "")
 HTTPD = None
-BIND_HOST = "127.0.0.1"        # en qué dirección escucha ahora (127.0.0.1 = solo esta PC; 0.0.0.0 = también la red)
+BIND_HOST = "127.0.0.1"        # el servidor escucha solo en esta PC
 STOP = threading.Event()      # se activa para apagar el programa
-REBIND_LOCK = threading.Lock()
 
 
 # ------------------------------------------------------------------ base de datos
@@ -194,28 +190,6 @@ def set_setting(c, key, value):
 
 def is_loopback_host(h):
     return h in ("127.0.0.1", "localhost", "::1")
-
-
-def local_addresses():
-    """Direcciones de esta PC dentro de la red (la principal primero), para armar el enlace que se le manda a los demás."""
-    ips = []
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("10.255.255.255", 1))     # no envía nada: solo averigua por qué placa saldría
-        ips.append(s.getsockname()[0])
-        s.close()
-    except Exception:
-        pass
-    try:
-        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            ips.append(info[4][0])
-    except Exception:
-        pass
-    out = []
-    for ip in ips:
-        if ip not in out and not ip.startswith("127.") and not ip.startswith("169.254.") and ip != "0.0.0.0":
-            out.append(ip)
-    return out
 
 
 def audit(c, user, action, detail=""):
@@ -363,21 +337,12 @@ def client_is_local(addr):
 
 
 def host_allowed(host_header):
-    """Contra DNS rebinding: si el servidor escucha solo en esta PC, el Host debe ser local."""
+    """Contra DNS rebinding: el servidor escucha solo en esta PC, así que el Host debe ser local."""
     if not host_header:
         return False
     h = host_header.strip().lower()
-    if h.startswith("["):
-        name = h.split("]")[0] + "]"
-    else:
-        name = h.split(":")[0]
-    if is_loopback_host(BIND_HOST):
-        return name in ("localhost", "127.0.0.1", "[::1]")
-    # compartido en la red: se aceptan direcciones IP y el nombre de esta PC (no nombres de internet: contra DNS rebinding)
-    if name in ("localhost", "[::1]") or re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", name):
-        return True
-    pc = socket.gethostname().lower()
-    return name == pc or name.startswith(pc + ".")
+    name = (h.split("]")[0] + "]") if h.startswith("[") else h.split(":")[0]
+    return name in ("localhost", "127.0.0.1", "[::1]")
 
 
 # ------------------------------------------------------------------ aviso de versión nueva
@@ -393,7 +358,7 @@ def update_cfg():
     for f in (RES_DIR / "actualizaciones.json", APP_DIR / "actualizaciones.json"):
         try:
             if f.is_file():
-                cfg.update(json.loads(f.read_text(encoding="utf-8")))
+                cfg.update(json.loads(f.read_text(encoding="utf-8-sig")))
                 break
         except Exception:
             pass
@@ -406,6 +371,15 @@ def update_cfg():
         m = re.match(r"https://drive\.google\.com/file/d/([A-Za-z0-9_-]{10,})", u) or re.match(r"https://drive\.google\.com/(?:open|uc)\?(?:[^#]*&)?id=([A-Za-z0-9_-]{10,})", u)
         if m:
             cfg["url_version"] = "https://drive.google.com/uc?export=download&id=" + m.group(1)
+    # id del archivo del instalador en Google Drive (enlace de compartir o el id solo): sale de ACÁ, nunca de internet
+    ui = cfg.get("url_instalador")
+    cfg["id_instalador"] = None
+    if isinstance(ui, str):
+        m = (re.match(r"https://drive\.google\.com/file/d/([A-Za-z0-9_-]{10,})", ui)
+             or re.match(r"https://drive\.google\.com/(?:open|uc)\?(?:[^#]*&)?id=([A-Za-z0-9_-]{10,})", ui)
+             or re.fullmatch(r"([A-Za-z0-9_-]{20,})", ui.strip()))
+        if m:
+            cfg["id_instalador"] = m.group(1)
     return cfg
 
 
@@ -448,7 +422,115 @@ def check_update(actual, force=False):
     out = {"configurado": True, "hay": nuevo > mio, "version": ".".join(str(x) for x in nuevo),
            "novedades": str(remote.get("novedades") or "")[:400],
            "descarga": enlace if _url_ok(enlace) else None}
+    sha, nb = str(remote.get("sha256") or "").lower(), remote.get("bytes")
+    out["auto"] = bool(nuevo > mio and cfg.get("id_instalador") and re.fullmatch(r"[0-9a-f]{64}", sha)
+                       and isinstance(nb, int) and not isinstance(nb, bool) and 100000 <= nb <= 500000000)
     return out
+
+
+# ---- Actualizar con un clic: bajar el instalador de Google Drive y dejarlo listo ----
+# El motor SOLO descarga y verifica (tamaño y SHA-256 que dice version.json). Quien lo ejecuta es la ventana, después de cerrar
+# el calendario con el cierre normal (guarda lo pendiente). El motor nunca lanza el instalador: está dentro de un Job de Windows
+# que lo apagaría junto con él.
+ACT = {"estado": "inactivo", "pct": 0, "error": "", "version": ""}
+ACT_LOCK = threading.Lock()
+DRIVE_DL = os.environ.get("GUARDIAS_DRIVE_BASE") or "https://drive.usercontent.google.com/download"
+
+
+class ActErr(Exception):
+    pass
+
+
+def act_dir():
+    d = os.environ.get("GUARDIAS_ACT_DIR")
+    if d:
+        d = Path(d)
+    elif os.environ.get("LOCALAPPDATA"):
+        d = Path(os.environ["LOCALAPPDATA"]) / "CalendarioGuardias" / "actualizacion"
+    else:
+        d = DATA_DIR.parent / "actualizacion"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def act_limpiar():
+    """Al arrancar: borra restos de una descarga cortada o de una actualización anterior (si algo está en uso, no pasa nada)."""
+    try:
+        for n in ("nuevo.part", "Instalar.exe", "Instalar.ok"):
+            f = act_dir() / n
+            if f.exists():
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+    except Exception:
+        pass
+
+
+def _act_set(**k):
+    with ACT_LOCK:
+        ACT.update(k)
+
+
+def _drive_bajar(fid, sha, total, ver):
+    d = act_dir()
+    part, final, ok = d / "nuevo.part", d / "Instalar.exe", d / "Instalar.ok"
+    for f in (part, final, ok):
+        try:
+            if f.exists():
+                f.unlink()
+        except OSError:
+            pass
+    try:
+        url = "%s?id=%s&export=download&confirm=t" % (DRIVE_DL, fid)
+        n, h = 0, hashlib.sha256()
+        for intento in range(2):
+            req = urllib.request.Request(url, headers={"User-Agent": "CalendarioGuardias"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                if (r.headers.get("Content-Type") or "").startswith("text/html"):
+                    html = r.read(300000).decode("utf-8", "ignore")
+                    if intento == 0:      # página de aviso de Drive para archivos grandes: se confirma con su propio formulario
+                        campos = dict(re.findall(r'<input[^>]*name="([^"]+)"[^>]*value="([^"]*)"', html))
+                        acc = re.search(r'<form[^>]*action="([^"]+)"', html)
+                        if campos.get("id") == fid and acc and (acc.group(1) == DRIVE_DL or acc.group(1).startswith("https://drive.usercontent.google.com/")):
+                            url = acc.group(1) + "?" + urllib.parse.urlencode(campos)
+                            continue
+                    raise ActErr("cuota" if re.search(r"quota|cuota|too many", html, re.I) else "pagina")
+                n, h, t0 = 0, hashlib.sha256(), time.time()
+                with open(part, "wb") as f:
+                    while True:
+                        b = r.read(65536)
+                        if not b:
+                            break
+                        f.write(b)
+                        h.update(b)
+                        n += len(b)
+                        if n > total + 1024:
+                            raise ActErr("incompleta")
+                        if time.time() - t0 > 1200:
+                            raise ActErr("lento")
+                        _act_set(pct=min(99, int(n * 100 / total)))
+            break
+        if n != total or h.hexdigest() != sha:
+            raise ActErr("incompleta")
+        with open(part, "rb") as f:
+            if f.read(2) != b"MZ":
+                raise ActErr("incompleta")
+        os.replace(part, final)
+        ok.write_text(sha + "\n" + ver + "\n", encoding="ascii")
+        _act_set(estado="listo", pct=100, error="")
+    except ActErr as e:
+        _act_set(estado="error", error=str(e))
+    except OSError as e:
+        _act_set(estado="error", error="espacio" if getattr(e, "errno", 0) == 28 else "sin_conexion")
+    except Exception:
+        _act_set(estado="error", error="sin_conexion")
+    finally:
+        if ACT["estado"] != "listo":
+            try:
+                part.unlink()
+            except OSError:
+                pass
 
 
 # ---- Grupo (sincronización entre PCs a través del buzón cifrado) ----
@@ -458,19 +540,29 @@ BUZON_PATH = re.compile(r"^/groups/[0-9a-f]{32}/(?:join|invites|log|snapshot|mem
 GRUPO_MSG = "Esta PC está conectada a un grupo. Para borrar datos o volver a una versión anterior, primero salí del grupo (Administración → Grupo)."
 
 
-def buzon_url():
+def buzon_cfg():
     cfg = {}
     for f in (RES_DIR / "buzon.json", APP_DIR / "buzon.json"):
         try:
             if f.is_file():
-                cfg.update(json.loads(f.read_text(encoding="utf-8")))
+                cfg.update(json.loads(f.read_text(encoding="utf-8-sig")))
                 break
         except Exception:
             pass
     if CFG.get("url_buzon"):
         cfg["url"] = CFG["url_buzon"]
-    u = cfg.get("url")
+    return cfg
+
+
+def buzon_url():
+    u = buzon_cfg().get("url")
     return u.rstrip("/") if _url_ok(u) else None
+
+
+def buzon_codigo():
+    """Código con el que este programa puede crear un grupo nuevo en el buzón (viene en buzon.json; nunca llega a la página)."""
+    c = buzon_cfg().get("codigo_creacion")
+    return c if isinstance(c, str) and 8 <= len(c) <= 200 else None
 
 
 def grupo_get(c):
@@ -710,13 +802,6 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             c.close()
 
-    def share_info(self, c):
-        port = int(CFG["port"])
-        on = not is_loopback_host(BIND_HOST)
-        addrs = local_addresses()
-        return {"enabled": on, "wanted": get_setting(c, "compartir", "0") == "1", "port": port,
-                "links": ["http://%s:%d/" % (a, port) for a in addrs], "pc": socket.gethostname()}
-
     def api_inner(self, c, method, p, q):
         # --- públicos
         if method == "GET" and p == "status":
@@ -890,19 +975,36 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200, {"version": newid})
 
         # --- grupo: configuración de esta PC y reenvío al buzón (solo administrador, solo desde esta PC)
-        if p == "grupo" or p == "grupo/salir" or p == "buzon":
+        if p == "grupo" or p == "grupo/salir" or p == "grupo/crear" or p == "buzon":
             if user["role"] != "admin" or not client_is_local(self.client_address[0]):
                 return self.fail(403, "Solo el administrador, desde esta misma PC, puede usar el grupo.")
             if method == "GET" and p == "grupo":
-                return self.send_json(200, {"grupo": grupo_get(c), "buzon": buzon_url() is not None})
+                return self.send_json(200, {"grupo": grupo_get(c), "buzon": buzon_url() is not None, "puede_crear": buzon_codigo() is not None})
+            if method == "POST" and p == "grupo/crear":
+                # Crea un grupo nuevo en el buzón (la primera persona) y devuelve su invitación de dueña. La página la canjea enseguida.
+                if grupo_get(c):
+                    return self.fail(409, "Esta computadora ya está en un grupo.")
+                base, cod = buzon_url(), buzon_codigo()
+                if not base or not cod:
+                    return self.fail(400, "Este programa no está preparado para crear grupos. Avisale a quien te lo instaló.")
+                try:
+                    req = urllib.request.Request(base + "/v1/groups", data=b"{}", method="POST",
+                                                 headers={"User-Agent": "CalendarioGuardias", "Content-Type": "application/json", "x-setup-code": cod})
+                    with urllib.request.urlopen(req, timeout=15) as r:
+                        j = json.loads(r.read(20000).decode("utf-8"))
+                except Exception:
+                    return self.send_json(200, {"ok": False, "error": "sin_conexion"})
+                if not (isinstance(j, dict) and re.fullmatch(r"[0-9a-f]{32}", str(j.get("group", ""))) and isinstance(j.get("code"), str)):
+                    return self.send_json(200, {"ok": False, "error": "respuesta"})
+                with WRITE_LOCK:
+                    audit(c, user, "grupo_creado")
+                return self.send_json(200, {"ok": True, "g": j["group"], "c": j["code"]})
             if method == "PUT" and p == "grupo":
                 d = self.read_json()
                 if d is None:
                     return
                 if not grupo_valido(d.get("grupo")):
                     return self.fail(400, "Los datos del grupo no tienen el formato esperado.")
-                if not is_loopback_host(BIND_HOST) or get_setting(c, "compartir", "0") == "1":
-                    return self.fail(409, "Esta PC está compartida en la red. «Compartir en red» y «Grupo» no se usan a la vez: primero dejá de compartir.")
                 with WRITE_LOCK:
                     set_setting(c, "grupo", json.dumps(d["grupo"], ensure_ascii=False, separators=(",", ":")))
                     audit(c, user, "grupo_guardado")
@@ -943,34 +1045,42 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json(200, {"s": 0, "j": {}})      # sin conexión o respuesta inválida: la página reintenta sola
                 return self.send_json(200, {"s": code, "j": j})
 
+        if p == "actualizar":
+            if user["role"] != "admin" or not client_is_local(self.client_address[0]):
+                return self.fail(403, "Solo el administrador, desde esta misma PC, puede actualizar el programa.")
+            if method == "GET":
+                with ACT_LOCK:
+                    out = dict(ACT)
+                out["carpeta"] = str(act_dir())
+                return self.send_json(200, out)
+            if method == "POST":
+                d = self.read_json()
+                if d is None:
+                    return
+                with ACT_LOCK:
+                    if ACT["estado"] == "bajando":      # un solo clic vale: si ya está bajando, no se hace otra descarga
+                        return self.send_json(200, dict(ACT))
+                info = check_update(str(d.get("actual") or ""), force=True)    # se vuelve a pedir: el hash tiene que ser el de ahora
+                if not info.get("hay"):
+                    return self.fail(409, "No hay una versión nueva para instalar.")
+                if not info.get("auto"):
+                    return self.fail(400, "Esta actualización no se puede bajar sola.")
+                with UPD_LOCK:
+                    data = dict(UPD_CACHE["data"] or {})
+                fid = update_cfg().get("id_instalador")
+                with ACT_LOCK:
+                    if ACT["estado"] == "bajando":
+                        return self.send_json(200, dict(ACT))
+                    ACT.update(estado="bajando", pct=0, error="", version=info["version"])
+                    snap = dict(ACT)
+                threading.Thread(target=_drive_bajar, args=(fid, str(data["sha256"]).lower(), int(data["bytes"]), info["version"]), daemon=True).start()
+                return self.send_json(200, snap)
+
         if method == "GET" and p == "update":
             if user["role"] != "admin":
                 return self.fail(403, "Solo el administrador puede buscar actualizaciones.")
             actual = (q.get("actual") or [""])[0]
             return self.send_json(200, check_update(actual, force=((q.get("forzar") or ["0"])[0] == "1")))
-
-        if p == "share":
-            if user["role"] != "admin":
-                return self.fail(403, "Solo el administrador puede compartir el calendario.")
-            if method == "GET":
-                return self.send_json(200, self.share_info(c))
-            if method == "POST":
-                d = self.read_json()
-                if d is None:
-                    return
-                want = bool(d.get("enabled"))
-                if want and grupo_get(c):
-                    return self.fail(409, "Esta PC está conectada a un grupo. «Compartir en red» y «Grupo» no se usan a la vez: primero salí del grupo.")
-                if want == (not is_loopback_host(BIND_HOST)) and want == (get_setting(c, "compartir", "0") == "1"):
-                    return self.send_json(200, self.share_info(c))
-                with WRITE_LOCK:
-                    set_setting(c, "compartir", "1" if want else "0")
-                    audit(c, user, "compartir_activado" if want else "compartir_desactivado")
-                # el cambio de dirección se hace después de contestar (el servidor se reabre en la misma conexión)
-                threading.Thread(target=rebind, args=("0.0.0.0" if want else "127.0.0.1",), daemon=True).start()
-                info = self.share_info(c)
-                info["enabled"] = want
-                return self.send_json(200, info)
 
         if method == "POST" and p == "wipe":
             # Borrado de datos, solo administrador y protegido con SU contraseña (se pide de nuevo, aunque ya tenga sesión).
@@ -1267,80 +1377,33 @@ def start_listener(host, port):
     return httpd
 
 
-def rebind(new_host):
-    """Cambia en caliente la dirección en la que escucha el servidor (solo esta PC <-> toda la red)."""
-    global HTTPD, BIND_HOST
-    time.sleep(0.4)    # deja terminar de contestar el pedido que lo originó
-    with REBIND_LOCK:
-        if new_host == BIND_HOST:
-            return
-        port = int(CFG["port"])
-        old, old_host = HTTPD, BIND_HOST
-        try:
-            old.shutdown()
-            old.server_close()
-        except Exception:
-            pass
-        try:
-            HTTPD = start_listener(new_host, port)
-            BIND_HOST = new_host
-            say(" Ahora escucha en:", new_host)
-        except OSError as e:
-            say("AVISO: no pude abrir %s:%d (%s). Vuelvo a %s." % (new_host, port, e, old_host))
-            try:
-                HTTPD = start_listener(old_host, port)
-                BIND_HOST = old_host
-            except OSError as e2:
-                say("ERROR: no pude reabrir el servidor:", e2)
-                STOP.set()
-
-
 def main():
-    global HTTPD, BIND_HOST
+    global HTTPD
     init_db()
+    act_limpiar()
     if not HTML_PATH.exists():
         say("ERROR: no encuentro guardias.html (buscado en %s)." % HTML_PATH)
         pause()
         return 1
-    host, port = CFG["host"], int(CFG["port"])
-    # ¿el administrador dejó activado «compartir»? entonces escucha en toda la red
+    port = int(CFG["port"])
     try:
-        c0 = db()
-        try:
-            if get_setting(c0, "compartir", "0") == "1" and is_loopback_host(host):
-                host = "0.0.0.0"
-        finally:
-            c0.close()
-    except Exception:
-        pass
-    try:
-        HTTPD = start_listener(host, port)
-        BIND_HOST = host
+        HTTPD = start_listener("127.0.0.1", port)
     except OSError as e:
-        if not is_loopback_host(host):    # no se pudo abrir en la red: al menos en esta PC
-            try:
-                HTTPD = start_listener("127.0.0.1", port)
-                BIND_HOST = "127.0.0.1"
-            except OSError:
-                HTTPD = None
-        if HTTPD is None:
-            say("ERROR: no pude abrir el puerto %d (%s)." % (port, e))
-            say("Puede que el programa ya esté abierto, o que otro programa use ese puerto.")
-            say("Podés cambiar el puerto en config.json.")
-            pause()
-            return 1
+        say("ERROR: no pude abrir el puerto %d (%s)." % (port, e))
+        say("Puede que el programa ya esté abierto, o que otro programa use ese puerto.")
+        say("Podés cambiar el puerto en config.json.")
+        pause()
+        return 1
     threading.Thread(target=backup_loop, daemon=True).start()
     try:
         backup_now("inicio")
     except Exception as e:
         say("AVISO: falló el respaldo de inicio:", e)
     keep_ref = install_close_handler(lambda: backup_now("cierre"))
-    url = "http://%s:%d/" % ("localhost" if BIND_HOST in ("127.0.0.1", "0.0.0.0", "::1") else BIND_HOST, port)
+    url = "http://localhost:%d/" % port
     say("=" * 60)
     say(" Calendario de guardias — servidor en marcha")
     say(" Abrí:", url)
-    if BIND_HOST == "0.0.0.0":
-        say(" Compartido con la red. Las contraseñas viajan sin cifrar (red interna, sin proxy).")
     say(" Datos:", DATA_DIR)
     say(" Para cerrarlo: cerrá esta ventana (o Ctrl+C).")
     say("=" * 60)
@@ -1353,9 +1416,8 @@ def main():
         pass
     finally:
         try:
-            with REBIND_LOCK:
-                if HTTPD is not None:
-                    HTTPD.shutdown()
+            if HTTPD is not None:
+                HTTPD.shutdown()
         except Exception:
             pass
         try:

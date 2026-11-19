@@ -33,7 +33,10 @@ if ($LASTEXITCODE -ne 0) { throw 'falló la compilación del instalador' }
 $nov = ''
 $novFile = Join-Path $base 'NOVEDADES.txt'
 if (Test-Path $novFile) { $nov = ((Get-Content $novFile -Encoding UTF8 -TotalCount 1) -join '').Trim() }
-$json = [ordered]@{ version = $ver; novedades = $nov } | ConvertTo-Json
+# huella y tamaño del instalador: el programa los usa para comprobar que lo que baja de Drive es exactamente este archivo
+$sha = (Get-FileHash $out -Algorithm SHA256).Hash.ToLower()
+$bytes = (Get-Item $out).Length
+$json = [ordered]@{ version = $ver; novedades = $nov; sha256 = $sha; bytes = [int64]$bytes } | ConvertTo-Json
 [IO.File]::WriteAllText((Join-Path $base 'dist\version.json'), $json, (New-Object Text.UTF8Encoding $false))
 Write-Host ('version.json generado: ' + $json.Replace("`r`n",' ')) -ForegroundColor Green
 Get-ChildItem $out | Select-Object Name, @{n='MB'; e={ [math]::Round($_.Length / 1MB, 1) }}

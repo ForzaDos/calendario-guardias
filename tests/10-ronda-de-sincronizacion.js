@@ -38,7 +38,7 @@ function d1(db){const mk=sql=>{let a=[];const s={bind(...x){a=x;return s},run(){
     const pc={S:state,token:j.j.token,off:false,commits:0,cl:{g:G,token:j.j.token,k:key,epoch:1,base:{},seen:0,adopt:!!adopt},mid:null};
     pc.io=async(m,p,b)=>{if(pc.off)return {s:0,j:{}};const r=await raw(m,p,{body:b,token:pc.token});if(pc.mid){const f=pc.mid;pc.mid=null;f()}return r};
     pc.hooks={getS:()=>pc.S,commit:(s,cl)=>{if(s)pc.S=s;pc.commits++;pc.saved=J(cl)},nom:'x'};
-    pc.round=()=>A.syncRound(pc.cl,pc.io,pc.hooks);
+    pc.round=(auto)=>A.syncRound(pc.cl,pc.io,pc.hooks,auto);
     return pc;
   };
   const inv=async()=>(await raw('POST','/groups/'+G+'/invites',{token:T0,body:{}})).j.code;
@@ -46,7 +46,7 @@ function d1(db){const mk=sql=>{let a=[];const s={bind(...x){a=x;return s},run(){
   const base0=A.freshState();A.generate(base0);
   const P1=await(async()=>{const pc={S:J(base0),token:T0,off:false,commits:0,cl:{g:G,token:T0,k:key,epoch:1,base:{},seen:0,adopt:false}};
     pc.io=async(m,p,b)=>{if(pc.off)return {s:0,j:{}};const r=await raw(m,p,{body:b,token:pc.token});if(pc.mid){const f=pc.mid;pc.mid=null;f()}return r};
-    pc.hooks={getS:()=>pc.S,commit:(s,cl)=>{if(s)pc.S=s;pc.commits++;pc.saved=J(cl)},nom:'dueña'};pc.round=()=>A.syncRound(pc.cl,pc.io,pc.hooks);return pc})();
+    pc.hooks={getS:()=>pc.S,commit:(s,cl)=>{if(s)pc.S=s;pc.commits++;pc.saved=J(cl)},nom:'dueña'};pc.round=(auto)=>A.syncRound(pc.cl,pc.io,pc.hooks,auto);return pc})();
 
   const P2=await mkpc(await inv(),A.blankState(),true),P3=await mkpc(await inv(),A.blankState(),true);
   let r=await P2.round();chk('unida con el buzón vacío: «esperando»',r.status==='esperando'&&P2.cl.adopt===true);
@@ -115,5 +115,18 @@ function d1(db){const mk=sql=>{let a=[];const s={bind(...x){a=x;return s},run(){
   A.setSlot(P1.S,ks[22],'1.h24',1);A.setSlot(P2.S,ks[23],'1.h24',2);A.setSlot(P2.S,ks[22],'1.h24',3);
   for(let i=0;i<3;i++){await Promise.all([P1.round(),P2.round()])}
   chk('rondas simultáneas: las dos iguales',eq(P1.S,P2.S));
+
+  // lo manual le gana a lo automático (Reasignar / Limpiar mes), en los dos órdenes de llegada
+  for(const orden of ['manual-primero','auto-primero']){
+    await P1.round();await P2.round();
+    const k=ks[orden==='manual-primero'?24:25],kLibre=ks[orden==='manual-primero'?26:27];
+    A.setSlot(P2.S,k,'1.h24',4);                        // P2 pone a mano a la médica 4
+    A.setSlot(P1.S,k,'1.h24',5);A.setSlot(P1.S,kLibre,'1.h24',6);   // P1 «reasigna»: otro valor en el mismo turno y otro turno libre
+    if(orden==='manual-primero'){await P2.round(false);await P1.round(true)}
+    else{await P1.round(true);await P2.round(false)}
+    await P1.round(false);await P2.round(false);
+    chk('auto vs manual ('+orden+'): queda lo puesto a mano',A.slotDoc(P1.S,k,'1.h24')===4&&A.slotDoc(P2.S,k,'1.h24')===4&&eq(P1.S,P2.S));
+    chk('auto vs manual ('+orden+'): lo automático de otros turnos sí pasa',A.slotDoc(P2.S,kLibre,'1.h24')===6);
+  }
   console.log(ok?'TODO OK':'HAY FALLOS');process.exit(ok?0:1);
 })().catch(e=>{console.log('FAIL excepción: '+e.stack);console.log('HAY FALLOS');process.exit(1)});

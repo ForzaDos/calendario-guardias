@@ -1,1 +1,1 @@
-¡NUEVO! Ahora podés trabajar EN GRUPO: varias médicas, cada una desde su propia casa, sobre el mismo calendario, y los cambios se pasan solos entre todas (Administración → Grupo). Actualizá para usarlo.
+¡NUEVA VERSIÓN! Cuando dos personas tocan el mismo turno, ahora siempre gana lo puesto a mano sobre lo de «Reasignar automático»; la pantalla de Administración quedó más simple y las guías tienen capturas nuevas. Actualizá con un clic.

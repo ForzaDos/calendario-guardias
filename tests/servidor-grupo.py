@@ -15,7 +15,7 @@ D = tempfile.mkdtemp(prefix="guardias_grupo_")
 shutil.copy(os.path.join(RAIZ, "servidor.py"), D)
 shutil.copy(os.path.join(RAIZ, "guardias.html"), D)
 if BUZON:
-    json.dump({"url": BUZON}, open(os.path.join(D, "buzon.json"), "w"))
+    json.dump({"url": BUZON, "codigo_creacion": CODIGO}, open(os.path.join(D, "buzon.json"), "w"))
 PORT = 18231
 env = dict(os.environ, GUARDIAS_PORT=str(PORT), GUARDIAS_SIN_NAVEGADOR="1")
 proc = subprocess.Popen([sys.executable, "-I", os.path.join(D, "servidor.py")], cwd=D, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -101,7 +101,7 @@ try:
     s, j, _ = req("POST", "/api/restore/%d" % v1, None, A)
     chk("restaurar una versión estando en un grupo: 409", s == 409, (s, j))
     s, j, _ = req("POST", "/api/share", {"enabled": True}, A)
-    chk("compartir en red estando en un grupo: 409", s == 409, (s, j))
+    chk("«compartir en red» ya no existe (404)", s == 404, (s, j))
 
     # reenvío al buzón: validaciones
     s, j, _ = req("POST", "/api/buzon", {"method": "GET", "path": "/ping"}, A)
@@ -128,11 +128,24 @@ try:
         s, j, _ = req("POST", "/api/buzon", {"method": "GET", "path": "/groups/" + cr["group"] + "/log?after=0"}, A)
         chk("sin token: 401 del buzón, devuelto tal cual", s == 200 and j["s"] == 401, (s, j))
 
+    # crear un grupo desde el programa (la primera persona)
+    s, j, _ = req("POST", "/api/grupo/crear", {}, A)
+    chk("ya en un grupo no se crea otro (409)", s == 409, (s, j))
+    s, j, _ = req("POST", "/api/grupo/crear", {}, E)
+    chk("un editor no puede crear grupos (403)", s == 403, (s, j))
+
     # salir del grupo
     s, j, _ = req("POST", "/api/grupo/salir", None, A)
     chk("salir del grupo", s == 200, (s, j))
     s, j, _ = req("GET", "/api/grupo", None, A)
     chk("ya no hay grupo", j["grupo"] is None, j)
+    s, j2, _ = req("POST", "/api/grupo/crear", {}, A)
+    if BUZON:
+        chk("crear un grupo desde el programa: devuelve su invitación", s == 200 and j2.get("ok") is True and len(j2.get("g", "")) == 32 and len(j2.get("c", "")) > 8, (s, j2))
+        s, j3, _ = req("GET", "/api/grupo", None, A)
+        chk("el programa sabe que puede crear grupos", j3.get("puede_crear") is True, j3)
+    else:
+        chk("sin código de creación configurado: 400 con aviso claro", s == 400, (s, j2))
     s, j, _ = req("POST", "/api/wipe", {"password": "mala", "mode": "guardias", "state": ST}, A)
     chk("sin grupo, borrar vuelve a funcionar (pide la contraseña: 403)", s == 403, (s, j))
     s, j, _ = req("POST", "/api/restore/%d" % v1, None, A)

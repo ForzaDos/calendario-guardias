@@ -58,6 +58,7 @@ namespace CalendarioGuardias
         }
 
         internal static bool RecienInstalado;
+        internal static bool Actualizado;        // lo manda el instalador cuando termina una actualización
 
         /// <summary>Crea el acceso directo del Escritorio (lo hace el programa y no el instalador, para no tocar otras unidades).</summary>
         internal static void CrearAccesoEscritorio()
@@ -83,6 +84,7 @@ namespace CalendarioGuardias
         private static void Main(string[] args)
         {
             RecienInstalado = Array.IndexOf(args, "--instalado") >= 0;   // lo manda el instalador al terminar
+            Actualizado = Array.IndexOf(args, "--actualizado") >= 0;     // …y este, si fue una actualización
             // Una sola instancia por usuario de Windows.
             bool primera;
             using (var mutex = new Mutex(true, @"Local\CalendarioGuardias-Ventana", out primera))
@@ -207,6 +209,7 @@ namespace CalendarioGuardias
         private bool _cerrando;                // hay un cierre en curso (guardando / apagando)
         private bool _cierreOk;                // el cierre ya está decidido: dejar pasar FormClosing
         private bool _enNavegador;             // la página está abierta en el navegador, no en esta ventana
+        private bool _actualizarAlCerrar;      // la página pidió «cerrar y actualizar»: al terminar de cerrar se lanza el instalador
 
         public Ventana()
         {
@@ -410,6 +413,14 @@ namespace CalendarioGuardias
 
             Program.Log("abro web en puerto " + _puerto);
             await AbrirWebAsync();
+            if (Program.Actualizado && !IsDisposed && !_cierreOk)
+            {
+                Program.Actualizado = false;
+                Program.CrearAccesoEscritorio();
+                MessageBox.Show(
+                    "El Calendario de guardias se actualizó correctamente.\n\nTus guardias y tus datos siguen como estaban.",
+                    Titulo, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
             if (Program.RecienInstalado && !IsDisposed && !_cierreOk)
             {
                 Program.RecienInstalado = false;
@@ -480,6 +491,20 @@ namespace CalendarioGuardias
                 _web.CoreWebView2.Settings.IsStatusBarEnabled = false;
                 _web.CoreWebView2.Settings.IsZoomControlEnabled = true;
                 _web.CoreWebView2.Settings.AreDevToolsEnabled = false;
+                // La página puede pedir «cerrar y actualizar». Solo se acepta de ESTA página (nuestro motor) y solo ese mensaje:
+                // nunca recibe rutas ni comandos; el instalador sale de una carpeta fija y se verifica antes de lanzarlo.
+                _web.CoreWebView2.WebMessageReceived += (s, e) =>
+                {
+                    try
+                    {
+                        if (!(e.Source ?? "").StartsWith("http://127.0.0.1:" + _puerto + "/", StringComparison.Ordinal)) return;
+                        if (e.TryGetWebMessageAsString() != "cerrar-y-actualizar") return;
+                        Program.Log("la página pidió cerrar y actualizar");
+                        _actualizarAlCerrar = true;
+                        BeginInvoke(new Action(Close));
+                    }
+                    catch (Exception ex) { Program.Log("mensaje de la página: " + ex.Message); }
+                };
 
                 _web.Source = new Uri("http://127.0.0.1:" + _puerto + "/");
             }
@@ -532,7 +557,8 @@ namespace CalendarioGuardias
             _cerrando = true;
             try
             {
-                if (!await PrepararCierreAsync()) { _cerrando = false; return; }
+                if (!await PrepararCierreAsync()) { _cerrando = false; _actualizarAlCerrar = false; return; }
+                if (_actualizarAlCerrar && !LanzarInstalador()) { _cerrando = false; _actualizarAlCerrar = false; return; }
                 Text = Titulo + " — cerrando…";
                 await ApagarMotorAsync();
                 _cierreOk = true;
@@ -543,6 +569,47 @@ namespace CalendarioGuardias
                 Program.Log("error al cerrar: " + ex);
                 _cierreOk = true;
                 Close();
+            }
+        }
+
+        /// <summary>
+        /// Lanza el instalador que bajó el motor (carpeta fija, nombre fijo), después de comprobar su SHA-256 contra el que dejó anotado.
+        /// El instalador espera a que esta ventana termine (le pasamos nuestro número de proceso). Si no se puede, el calendario SIGUE abierto.
+        /// </summary>
+        private bool LanzarInstalador()
+        {
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CalendarioGuardias", "actualizacion");
+            string exe = Path.Combine(dir, "Instalar.exe"), ok = Path.Combine(dir, "Instalar.ok");
+            try
+            {
+                if (!File.Exists(exe) || !File.Exists(ok)) throw new FileNotFoundException("no está la actualización bajada");
+                string[] lineas = File.ReadAllLines(ok);
+                string esperado = lineas.Length > 0 ? lineas[0].Trim().ToLowerInvariant() : "";
+                string real;
+                using (var sha = SHA256.Create())
+                using (var f = File.OpenRead(exe))
+                    real = BitConverter.ToString(sha.ComputeHash(f)).Replace("-", "").ToLowerInvariant();
+                if (real != esperado) throw new InvalidDataException("el instalador no coincide con lo anotado");
+                Exception ultimo = null;
+                for (int i = 0; i < 3; i++)
+                {
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo(exe, "/actualizar " + Process.GetCurrentProcess().Id) { UseShellExecute = false });
+                        Program.Log("instalador lanzado: " + exe);
+                        return true;
+                    }
+                    catch (Exception ex) { ultimo = ex; Thread.Sleep(2000); }
+                }
+                throw ultimo ?? new Exception("no se pudo lanzar");
+            }
+            catch (Exception ex)
+            {
+                Program.Log("no pude lanzar el instalador: " + ex.Message);
+                MessageBox.Show(
+                    "No se pudo iniciar la actualización.\n\nEl calendario sigue abierto y tus datos están a salvo. Probá de nuevo más tarde o avisale a quien te lo instaló.",
+                    Titulo, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return false;
             }
         }
 

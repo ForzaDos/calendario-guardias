@@ -493,11 +493,10 @@ h1{font-size:16px;font-weight:650;margin:0;letter-spacing:0;line-height:1.2}
 .updver{font-weight:650;color:var(--ink-2,var(--ink))}
 .updnov{background:var(--accent-soft);border:1px solid var(--accent);border-radius:var(--r);padding:12px 14px;font-size:16px;font-weight:600;line-height:1.45}
 .updbar span{flex:1 1 280px}
-.sharecard .shareok{margin:10px 0;font-size:14px}
-.shsteps{margin:10px 0 10px 20px;padding:0;display:grid;gap:10px;font-size:14px;line-height:1.45}
+.shareok{margin:10px 0;font-size:14px}
 .sharelink{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
 .sharelink input{flex:1 1 260px;min-width:0;font-size:16px;font-weight:600}
-.shother{margin-top:8px;font-size:13px}
+
 .srvnote{background:var(--caution-soft);color:var(--caution);border-radius:var(--r-sm);padding:8px 10px;font-size:13px}
 .layout1{display:flex;flex-direction:column;gap:12px}
 .utab{width:100%;border-collapse:collapse}
@@ -611,7 +610,7 @@ const TYPE_ORDER=['h24','h12','n12'];
 const ALL7=[1,1,1,1,1,1,1];
 const DOWN=['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
 const MAX_PLANTS=Infinity;   // sin tope de plantas
-const APP_VERSION='1.1.0';   // subirla en cada entrega (junto con empaquetado/VERSION); se muestra en Administración
+const APP_VERSION='1.2.1';   // subirla en cada entrega (junto con empaquetado/VERSION); se muestra en Administración
 const DEFAULT_DOCTORS=['Ana Pérez','Luis Gómez','Marta Ruiz','Pablo Díaz','Lucía Torres','Diego Romero','Sofía Herrera','Martín Acosta','Valeria Molina','Tomás Silva'];   // nombres de ejemplo (ficticios)
 function pad(n){return String(n).padStart(2,'0')}
 function dkey(y,m,d){return y+'-'+pad(m+1)+'-'+pad(d)}
@@ -1437,10 +1436,11 @@ async function syncOpen(k,b64,aad){
 //  cl    = {g,token,k,epoch,base,seen,adopt}   (se modifica; quien llama lo guarda en `hooks.commit`)
 //  io    = async (método, ruta, cuerpo) => {s,j}   (habla con el buzón; ruta SIN /v1)
 //  hooks = {getS(): estado actual, commit(estadoNuevo|null, cl): guarda estado + base + seen JUNTOS (síncrono), nom}
+//  auto  = true si los cambios propios que se suben vienen de una acción automática (Reasignar, Otra variante, Limpiar mes)
 // Devuelve {status:'ok'|'esperando'|'red'|'quitada'|'sin_acceso'|'epoca'|'error', notes, subio, recibio}
 // IMPORTANTE: después de cada `await` se vuelve a leer el estado (getS) y se combina de forma SÍNCRONA: lo que la persona
 // editó mientras esperaba la red no se pierde (queda como diferencia para la ronda siguiente).
-async function syncRound(cl,io,hooks){
+async function syncRound(cl,io,hooks,auto){
   const base='/groups/'+cl.g,out={status:'ok',notes:[],subio:false,recibio:false};
   const fail=r=>({status:r.s===0?'red':(r.j&&r.j.error==='quitada'?'quitada':(r.s===401||r.s===403?'sin_acceso':'red')),notes:out.notes});
   for(let intento=0;intento<6;intento++){
@@ -1474,7 +1474,7 @@ async function syncRound(cl,io,hooks){
     // ---- combinar (síncrono desde acá hasta el commit) ----
     const S=hooks.getS();
     const inc=(snap&&snapSeq>cl.seen)?[{by:'otra',auto:false,patch:fdiff(cl.base,snap.f)}]:[];
-    const rb=syncRebase(cl.base,S,inc,false);
+    const rb=syncRebase(cl.base,S,inc,!!auto);   // auto: lo que subo salió de «Reasignar»/«Limpiar mes»; si alguien tocó lo mismo a mano, gana lo manual
     if(inc.length){cl.base=rb.base;cl.seen=snapSeq;out.notes=out.notes.concat(rb.notes);out.recibio=true;hooks.commit(rb.state,cl)}
     else if(snapSeq>cl.seen){cl.seen=snapSeq;hooks.commit(null,cl)}
     if(!Object.keys(rb.pend).length)return out;
@@ -2145,7 +2145,7 @@ app.addEventListener('click',async e=>{
   const b=e.target.closest('button[data-act]');if(!b)return;
   const a=b.dataset.act,k=b.dataset.key,t=b.dataset.type,id=b.dataset.id?+b.dataset.id:null;
   if(a.startsWith('srv-')||a==='splitpop')return;   // las acciones del servidor y de dividir guardia las maneja otro listener
-  msg='';const before=JSON.stringify(S);
+  msg='';let before=JSON.stringify(S);
   if(a==='prev'||a==='next'){S.month+=a==='next'?1:-1;if(S.month<0){S.month=11;S.year--}if(S.month>11){S.month=0;S.year++}
     form.from='';form.to='';
     if(SRV.on){if(!monthKeys(S).some(x=>S.assign[x]))msg='Este mes está vacío. Tocá «Reasignar automático» para armarlo.'}   // con servidor no se genera solo al navegar (lo decide la persona)
@@ -2198,8 +2198,8 @@ app.addEventListener('click',async e=>{
     }}
   else if(a==='delrule'){S.rules.splice(+b.dataset.i,1);msg='Regla quitada. Los turnos ya puestos quedan como están hasta que reasignes.'}
   else if(a==='applybatch'){msg=batchApply(S,form)}
-  else if(a==='regen'){generate(S);msg=afterGen()}
-  else if(a==='variant'){S.seed++;generate(S);msg=afterGen()}
+  else if(a==='regen'){if(GRP.on){await grpFlush();before=JSON.stringify(S)}generate(S);msg=afterGen();if(GRP.on)GRP.autoNext=true}
+  else if(a==='variant'){if(GRP.on){await grpFlush();before=JSON.stringify(S)}S.seed++;generate(S);msg=afterGen();if(GRP.on)GRP.autoNext=true}
   else if(a==='qclear'){const y=(S.quotas||{})[ymKey(S)];if(y)delete y[id]}
   else if(a==='qclearall'){if(S.quotas)delete S.quotas[ymKey(S)]}
   else if(a==='unlockall'){monthKeys(S).forEach(x=>allSids(S).forEach(y=>delete S.locks[x+'|'+y]))}
@@ -2285,10 +2285,12 @@ function openClearPop(){
   });
   const f=el.querySelector('button.danger');if(f&&!f.disabled)f.focus();
 }
-function doClearMonth(pid,keep){
+async function doClearMonth(pid,keep){
+  if(GRP.on)await grpFlush();   // primero se pasa lo que ya se había editado a mano: la limpieza se manda aparte, como automática
   const before=JSON.stringify(S),antes=filledIn(pid,keep),conserv=keep?lockedIn(pid):0,donde=pid==null?'todas las plantas':'«'+plantName(S,pid)+'»';
   const n=clearMonth(S,pid,keep);
   msg='Limpié el mes en '+donde+': se borraron '+antes+' turno'+(antes===1?'':'s')+(keep?' y se conservaron '+conserv+' fijado'+(conserv===1?'':'s'):'')+'. '+(n?'Se volvieron a poner '+n+' turno'+(n===1?'':'s')+' de reglas semanales; el resto está vacío.':(keep?'El resto está vacío.':'No hay reglas semanales para ese mes: quedó todo vacío.'))+' Asigná a mano o tocá «Reasignar automático». Si te arrepentís, «Deshacer».';
+  if(GRP.on)GRP.autoNext=true;
   closeClearPop();pushHist(before);save();render();
 }
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeClearPop()});
@@ -2443,7 +2445,7 @@ document.addEventListener('keydown',e=>{
 // login, guardado con versiones y aviso cuando otra persona guardó. Si se abre con doble clic (file://), todo sigue como antes (localStorage).
 const SRV={upd:null,updMsg:'',on:false,user:null,role:null,version:0,lastSent:'',timer:null,saving:false,dirty:false,status:'saved',conflict:null,pollT:null,retryT:null,adm:null,admLoading:false,draft:{u:'',p:'',r:'editor'},pw:{o:'',n:''}};
 // Grupo: sincronización con otras PCs a través del buzón cifrado (ver syncRound en el núcleo). cl = {g,token,k,epoch,base,seen,adopt,nom,role}
-const GRP={on:false,cl:null,st:'idle',busy:false,t:null,needRender:false,metaDirty:false,metaVer:0,fails:0,draft:'',invite:'',info:'',hooks:null,members:null,membersLoading:false,pending:null,last:0};
+const GRP={on:false,cl:null,st:'idle',busy:false,t:null,needRender:false,metaDirty:false,metaVer:0,fails:0,draft:'',invite:'',info:'',hooks:null,members:null,membersLoading:false,pending:null,last:0,autoNext:false};
 async function api(method,path,body){
   const o={method,headers:{'X-Requested-With':'guardias'},credentials:'same-origin'};
   if(body!==undefined){o.headers['Content-Type']='application/json';o.body=JSON.stringify(body)}
@@ -2549,7 +2551,7 @@ function srvShowLogin(note){
   setTimeout(()=>{const i=document.querySelector('#srvform input[name=u]');if(i)i.focus()},50);
 }
 function srvShowSetup(){
-  lay(srvBrand('Primer inicio')+'<div class="note">Creá la cuenta del <b>administrador</b>. Con ella vas a poder crear los usuarios editores. Guardá bien la contraseña: no se puede recuperar sola.</div>'
+  lay(srvBrand('Primer inicio')+'<div class="note">Creá la cuenta del <b>administrador</b> de este calendario. Guardá bien la contraseña: no se puede recuperar sola.</div>'
    +'<form id="srvform" data-kind="setup"><label>Usuario (3 a 40 letras o números)<input name="u" autocomplete="username" required></label><label>Contraseña (mínimo 8 caracteres)<input name="p" type="password" autocomplete="new-password" required></label><label>Repetí la contraseña<input name="p2" type="password" autocomplete="new-password" required></label><div class="srverr" id="srverr"></div><button class="pri" type="submit">Crear administrador</button></form>');
   setTimeout(()=>{const i=document.querySelector('#srvform input[name=u]');if(i)i.focus()},50);
 }
@@ -2627,7 +2629,7 @@ async function srvCheckUpdate(force){
 function updBannerHtml(){
   const u=SRV.upd;if(!u||!u.hay||updDismissed(u.version)||SRV.role!=='admin')return '';
   return '<div class="updbar screen" role="status"><span><b>HAY UNA VERSIÓN NUEVA</b> del calendario ('+esc(u.version)+')'+(u.novedades?': '+esc(u.novedades):'')+'</span>'
-    +(u.descarga?'<a class="btnlink pri" href="'+esc(u.descarga)+'" target="_blank" rel="noopener">Ver cómo actualizar</a>':'')
+    +(u.auto?'<button class="pri" data-updgo="1">Actualizar ahora</button>':(u.descarga?'<a class="btnlink pri" href="'+esc(u.descarga)+'" target="_blank" rel="noopener">Ver cómo actualizar</a>':''))
     +'<button data-act="srv-upd-later">Después</button></div>';
 }
 // Cartel grande en el medio de la pantalla (una vez por sesión y por versión): no se puede pasar por alto
@@ -2638,11 +2640,67 @@ function updShowModal(){
   el.innerHTML='<div class="srvcard updcard" role="alertdialog" aria-labelledby="updttl"><div class="updbadge">NUEVA VERSIÓN</div><h2 id="updttl">Hay una versión nueva del calendario</h2>'
     +'<div class="updver">Versión '+esc(u.version)+' (la tuya es la '+esc(APP_VERSION)+')</div>'
     +(u.novedades?'<div class="updnov">'+esc(u.novedades)+'</div>':'')
-    +'<div class="note">No se instala sola y no se pierde ningún dato: tus guardias quedan como están. Para actualizar, abrí el enlace, descargá el instalador y abrilo.</div>'
-    +'<div class="row">'+(u.descarga?'<a class="btnlink pri" href="'+esc(u.descarga)+'" target="_blank" rel="noopener" data-updclose="1">Ver cómo actualizar</a>':'')+'<button data-updclose="1">Más tarde</button></div></div>';
+    +(u.auto?'<div class="note">Tocá <b>Actualizar ahora</b>: el programa baja la versión nueva, se cierra, se actualiza y se vuelve a abrir solo. <b>No se pierde ningún dato</b>: tus guardias quedan como están.</div>'
+            :'<div class="note">No se instala sola y no se pierde ningún dato: tus guardias quedan como están. Para actualizar, abrí el enlace, descargá el instalador y abrilo.</div>')
+    +'<div class="row">'+(u.auto?'<button class="pri" data-updgo="1">Actualizar ahora</button>':(u.descarga?'<a class="btnlink pri" href="'+esc(u.descarga)+'" target="_blank" rel="noopener" data-updclose="1">Ver cómo actualizar</a>':''))+'<button data-updclose="1">Más tarde</button></div></div>';
   document.body.appendChild(el);
 }
+// ---- Actualizar con un clic: baja el instalador (lo hace el motor), después la ventana cierra el calendario, instala y lo vuelve a abrir
+const UPDGO={busy:false};
+const UPD_ERR={
+  cuota:'Google Drive no deja bajarlo en este momento (hubo muchas descargas). Probá de nuevo en un rato, o bajalo a mano desde el enlace.',
+  sin_conexion:'No pude conectar. Revisá que esta computadora tenga internet y probá de nuevo.',
+  espacio:'No hay lugar suficiente en el disco para bajar la actualización. Liberá un poco de espacio y probá de nuevo.',
+  incompleta:'La descarga no llegó completa, así que no se instaló nada. Tu calendario sigue igual. Probá de nuevo.',
+  pagina:'No pude bajar la actualización ahora. Tu calendario sigue igual. Probá de nuevo en un rato, o bajala a mano desde el enlace.',
+  lento:'La descarga fue demasiado lenta y se cortó. Tu calendario sigue igual. Probá de nuevo cuando la conexión ande mejor.'};
+function updLay(html){
+  let el=document.getElementById('updlay');
+  if(!el){el=document.createElement('div');el.id='updlay';el.className='srvlay screen';document.body.appendChild(el)}
+  el.innerHTML='<div class="srvcard updcard" role="alertdialog"><div class="updbadge">ACTUALIZACIÓN</div>'+html+'</div>';
+}
+function updLayError(cod){
+  const u=SRV.upd||{};
+  updLay('<h2>No se pudo actualizar</h2><div class="note">'+esc(UPD_ERR[cod]||UPD_ERR.pagina)+'</div>'
+    +'<div class="row"><button class="pri" data-updgo="1">Probar de nuevo</button>'+(u.descarga?'<a class="btnlink" href="'+esc(u.descarga)+'" target="_blank" rel="noopener">Bajarla a mano</a>':'')+'<button data-updclose="1">Cerrar</button></div>');
+}
+async function updInstall(){
+  if(UPDGO.busy)return;UPDGO.busy=true;
+  try{
+    updLay('<h2>Preparando la actualización…</h2><div class="note">No cierres el calendario todavía.</div>');
+    let r;try{r=await api('POST','actualizar',{actual:APP_VERSION})}catch(e){r=null}
+    if(!r||!r.ok){updLayError('sin_conexion');return}
+    for(let i=0;i<4000;i++){
+      let g;try{g=await api('GET','actualizar')}catch(e){g=null}
+      const st=g&&g.ok?g.data:null;
+      if(st&&st.estado==='bajando'){updLay('<h2>Descargando la versión nueva…</h2><div class="updnov">'+st.pct+' %</div><div class="note">Puede tardar un minuto. Podés seguir mirando el calendario, pero no lo cierres.</div>')}
+      else if(st&&st.estado==='error'){updLayError(st.error);return}
+      else if(st&&st.estado==='listo'){
+        const u=SRV.upd||{};
+        if(window.chrome&&window.chrome.webview){
+          updLay('<h2>Lista para instalar</h2><div class="updver">Versión '+esc(st.version||u.version||'')+'</div>'
+            +'<div class="note">Para instalarla hay que cerrar el calendario: se guarda todo, se actualiza y se vuelve a abrir solo. <b>Tus guardias y tus datos no se tocan.</b></div>'
+            +'<div class="row"><button class="pri" data-updcerrar="1">Cerrar y actualizar</button><button data-updclose="1">Más tarde</button></div>');
+        }else{
+          updLay('<h2>Descargada</h2><div class="note">Este calendario está abierto en un navegador, así que no puede actualizarse solo. Cerralo y abrí con doble clic el archivo <b>Instalar.exe</b> de esta carpeta:</div><div class="updnov" style="font-size:13px;word-break:break-all">'+esc(st.carpeta||'')+'</div>'
+            +'<div class="row"><button data-updclose="1">Entendido</button></div>');
+        }
+        return;
+      }
+      await new Promise(x=>setTimeout(x,700));
+    }
+    updLayError('lento');
+  }finally{UPDGO.busy=false}
+}
 document.addEventListener('click',e=>{
+  const g=e.target.closest&&e.target.closest('[data-updgo]');if(g){updInstall();return}
+  const c=e.target.closest&&e.target.closest('[data-updcerrar]');
+  if(c){
+    updLay('<h2>Cerrando y actualizando…</h2><div class="note">Se guarda todo, se actualiza y el calendario se vuelve a abrir solo. No hace falta que hagas nada.<br><br>Si te pregunta algo antes de cerrar, respondé ahí. Si después de unos segundos no pasa nada, tocá «Cerrar y actualizar» de nuevo.</div>'
+      +'<div class="row"><button class="pri" data-updcerrar="1">Cerrar y actualizar</button><button data-updclose="1">Cancelar</button></div>');
+    try{window.chrome.webview.postMessage('cerrar-y-actualizar')}catch(x){}
+    return;
+  }
   const b=e.target.closest&&e.target.closest('[data-updclose]');if(!b)return;
   const u=SRV.upd;if(u)try{sessionStorage.setItem('guardias_updm_'+u.version,'1')}catch(x){}
   const el=document.getElementById('updlay');if(el)el.remove();
@@ -2691,10 +2749,10 @@ async function srvWipeRun(mode,pw){
 // ---- pestaña «Administración»
 async function srvLoadAdm(){
   if(SRV.admLoading)return;SRV.admLoading=true;
-  const out={versions:[],users:null,audit:null,share:null};
+  const out={versions:[],users:null,audit:null};
   try{
     const v=await api('GET','versions?limit=40');if(v.ok)out.versions=v.data.versions;
-    if(SRV.role==='admin'){const sh=await api('GET','share');if(sh.ok)out.share=sh.data;const u=await api('GET','users');if(u.ok)out.users=u.data.users;const a=await api('GET','audit');if(a.ok)out.audit=a.data.audit}
+    if(SRV.role==='admin'){const a=await api('GET','audit');if(a.ok)out.audit=a.data.audit}
   }catch(e){}
   SRV.adm=out;SRV.admLoading=false;if(tab==='adm'&&S)render();
 }
@@ -2710,38 +2768,9 @@ function admHtml(){
     h+='<div class="card"><h3>Actualizaciones</h3><div class="note">Versión instalada: <b>'+APP_VERSION+'</b>. El programa avisa solo cuando hay una versión nueva (necesita internet para consultarlo). Nunca se instala nada sin que lo hagas vos.</div>'
      +(u?'<div class="ok" style="margin:8px 0">Hay una versión nueva: <b>'+esc(u.version)+'</b>'+(u.novedades?' — '+esc(u.novedades):'')+'. '+(u.descarga?'<a href="'+esc(u.descarga)+'" target="_blank" rel="noopener">Abrir la carpeta de descarga</a>':'')+'</div>':'')
      +(SRV.updMsg?'<div class="note" style="margin:8px 0"><b>'+esc(SRV.updMsg)+'</b></div>':'')
-     +'<div class="row"><button class="pri" data-act="srv-upd-check">Buscar actualización</button></div></div>';
+     +'<div class="row"><button class="pri" data-act="srv-upd-check">Buscar actualización</button>'+((u&&u.auto)?'<button class="pri" data-updgo="1">Actualizar ahora</button>':'')+'</div></div>';
   }
   if(admin)h+=grpCardHtml();
-  if(admin&&a.share){
-    const sh=a.share,lk=(sh.links&&sh.links[0])||'';
-    h+='<div class="card sharecard"><h3>Compartir con otras personas</h3>'
-     +'<div class="note">Para que otra persona trabaje en este mismo calendario desde su computadora o su celular, conectada a la misma red o wifi del sanatorio. Mientras este programa esté abierto en tu computadora, ellos entran con su usuario y contraseña.</div>';
-    if(!sh.enabled){
-      h+='<div class="row"><button class="pri" data-act="srv-share-on">Permitir que otras personas entren</button></div>'
-       +'<div class="note">Cuando lo actives, es posible que Windows muestre un aviso. Elegí «Permitir acceso».</div>';
-    }else{
-      h+='<div class="shareok"><span class="pill ok">Compartido</span> Otras personas ya pueden entrar con su usuario y contraseña.</div>'
-       +'<ol class="shsteps">'
-       +'<li><b>Creá un usuario</b> para esa persona, más abajo en «Usuarios» (ponele un usuario y una contraseña fáciles de recordar).</li>'
-       +'<li><b>Mandale este enlace</b> (por WhatsApp o como prefieras):'
-       +(lk?'<div class="sharelink"><input readonly id="sharelink" value="'+esc(lk)+'" onclick="this.select()"><button class="pri" data-act="srv-share-copy" data-link="'+esc(lk)+'">Copiar enlace</button></div>'
-           :'<div class="note">No pude averiguar la dirección de esta computadora. Revisá que esté conectada a la red.</div>')
-       +((sh.links&&sh.links.length>1)?'<details class="shother"><summary>Si el enlace no funciona, probá con otra dirección</summary>'+sh.links.slice(1).map(x=>'<div class="sharelink"><input readonly value="'+esc(x)+'" onclick="this.select()"><button data-act="srv-share-copy" data-link="'+esc(x)+'">Copiar</button></div>').join('')+'</details>':'')
-       +'</li>'
-       +'<li><b>La otra persona</b> abre ese enlace en su navegador (Chrome, Edge, Safari...), escribe su usuario y contraseña, y ya está trabajando en el mismo calendario.</li></ol>'
-       +'<div class="note">Si no puede entrar: que revise que esté conectada a la misma red o wifi, y que este programa siga abierto en tu computadora.</div>'
-       +'<div class="row"><button data-act="srv-share-off">Dejar de compartir</button></div>';
-    }
-    h+='</div>';
-  }
-  if(admin&&a.users){
-    h+='<div class="card"><h3>Usuarios</h3><div class="note">El administrador crea y administra a los editores. Un usuario desactivado no puede entrar (sus datos y su historial se conservan).</div><div class="calscroll"><table class="utab"><tr><th>Usuario</th><th>Rol</th><th>Activo</th><th>Último ingreso</th><th></th></tr>'
-     +a.users.map(u=>'<tr><td><b>'+esc(u.username)+'</b></td><td><select data-srv-role="'+u.id+'"><option value="editor"'+(u.role==='editor'?' selected':'')+'>Editor</option><option value="admin"'+(u.role==='admin'?' selected':'')+'>Administrador</option></select></td><td><label class="actsw"><input type="checkbox" data-srv-active="'+u.id+'"'+(u.active?' checked':'')+'></label></td><td class="note">'+esc(u.last_login||'—')+'</td><td><button class="mini" data-act="srv-userpw" data-id="'+u.id+'" data-name="'+esc(u.username)+'">Nueva contraseña</button></td></tr>').join('')
-     +'</table></div>'
-     +'<h4 style="margin:16px 0 8px">Agregar usuario</h4><div class="dfields" style="max-width:720px"><label>Usuario<input data-srv="nu-u" value="'+esc(SRV.draft.u)+'" autocomplete="off"></label><label>Contraseña (mínimo 8)<input type="password" data-srv="nu-p" value="'+esc(SRV.draft.p)+'" autocomplete="new-password"></label><label>Rol<select data-srv="nu-r"><option value="editor"'+(SRV.draft.r==='editor'?' selected':'')+'>Editor</option><option value="admin"'+(SRV.draft.r==='admin'?' selected':'')+'>Administrador</option></select></label></div>'
-     +'<div class="row"><button class="pri" data-act="srv-newuser">'+ic('plus')+'Agregar usuario</button></div></div>';
-  }
   h+='<div class="card"><h3>Historial de versiones</h3><div class="note">Cada guardado crea una versión. Podés volver a una anterior: se guarda como una versión nueva, no se borra nada. Versión actual: <b>'+SRV.version+'</b>.</div><div class="calscroll"><table class="utab"><tr><th>N.º</th><th>Fecha</th><th>Quién</th><th>Nota</th><th></th></tr>'
    +(a.versions.length?a.versions.map(v=>'<tr><td>'+v.id+'</td><td>'+esc(v.created_at)+'</td><td>'+esc(v.username||'—')+'</td><td class="note">'+esc(v.note||'')+'</td><td>'+(v.id===SRV.version?'<span class="pill ok">actual</span>':'<button class="mini" data-act="srv-restore" data-id="'+v.id+'">Restaurar</button>')+'</td></tr>').join(''):'<tr><td colspan="5" class="note">Todavía no hay versiones.</td></tr>')
    +'</table></div><div class="row"><button class="mini" data-act="srv-admrefresh">Actualizar lista</button></div></div>';
@@ -2823,27 +2852,14 @@ app.addEventListener('click',async e=>{
     msg=r.ok?'Copia hecha: '+r.data.archivo+' (en '+r.data.carpeta+').':((r.data&&r.data.error)||'No pude hacer la copia.');
     render();return;
   }
-  if(a==='srv-share-on'||a==='srv-share-off'){
-    const want=a==='srv-share-on';b.disabled=true;
-    const r=await api('POST','share',{enabled:want});
-    if(!r.ok){msg=(r.data&&r.data.error)||'No se pudo cambiar. Probá de nuevo.';b.disabled=false;render();return}
-    await new Promise(x=>setTimeout(x,1800));   // el servidor se reabre un instante
-    SRV.adm=null;
-    msg=want?'Listo: ya podés mandarle el enlace a la otra persona.':'Listo: el calendario volvió a quedar solo en esta computadora.';
-    render();return;
-  }
-  if(a==='srv-share-copy'){
-    const ok=await copyTry(b.dataset.link);
-    msg=ok?'Enlace copiado. Pegalo en el mensaje que le mandes a la otra persona.':'No pude copiarlo solo: tocá el enlace de arriba y copialo (Ctrl+C).';
-    render();return;
-  }
   if(a==='srv-upd-check'){SRV.updMsg='Buscando…';render();await srvCheckUpdate(true);return}
   if(a==='srv-upd-later'){if(SRV.upd){try{sessionStorage.setItem('guardias_upd_'+SRV.upd.version,'1')}catch(e){}}render();return}
   if(a==='srv-wipe'){srvWipeShow(b.dataset.mode);return}
   if(a==='srv-admrefresh'){SRV.adm=null;render()}
   if(a==='srv-grp-join'){b.disabled=true;GRP.info=await grpJoin(GRP.draft);b.disabled=false;SRV.adm=null;render();return}
   if(a==='srv-grp-invite'){b.disabled=true;GRP.info=await grpInvite();b.disabled=false;render();return}
-  if(a==='srv-grp-copy'){GRP.info=(await copyTry(GRP.invite))?'Invitación copiada. Pegala en el mensaje que le mandes a la persona.':'No pude copiarla sola: tocá el cuadro, seleccioná todo y copiá (Ctrl+C).';render();return}
+  if(a==='srv-grp-copy'){GRP.info=(await copyTry(grpInviteMessage()))?'Mensaje copiado. Pegalo en el chat de WhatsApp con esa persona.':'No pude copiarlo solo: tocá el cuadro, seleccioná todo y copiá (Ctrl+C).';render();return}
+  if(a==='srv-grp-create'){b.disabled=true;GRP.info=await grpCreate();b.disabled=false;SRV.adm=null;render();return}
   if(a==='srv-grp-leave'){await grpLeave();return}
   if(a==='srv-grp-members'){GRP.members=null;render();return}
   if(a==='srv-grp-remove'){await grpRemove(b.dataset.id,b.dataset.name);return}
@@ -2900,9 +2916,11 @@ async function grpRound(){
   const vigente=()=>GRP.on&&GRP.cl===cl&&!!S;
   const io=async(m,p,b)=>vigente()?grpIo(m,p,b):{s:0,j:{}};
   const hooks={nom:cl.nom||SRV.user||'',getS:()=>S,commit:(s,c)=>{if(!vigente())return;if(s){S=s;hist=[];GRP.needRender=true}GRP.metaVer++;GRP.metaDirty=true;srvSchedule()}};
+  const auto=GRP.autoNext;
   GRP.busy=true;grpSetStatus('sync');
-  let r;try{r=await syncRound(cl,io,hooks)}catch(e){r={status:'error',notes:[]}}
+  let r;try{r=await syncRound(cl,io,hooks,auto)}catch(e){r={status:'error',notes:[]}}
   GRP.busy=false;if(!vigente())return;
+  if(auto&&r.status==='ok')GRP.autoNext=false;
   const st=r.status==='ok'?'ok':r.status;grpSetStatus(st);if(st==='ok')GRP.last=Date.now();
   GRP.fails=(st==='ok'||st==='esperando')?0:GRP.fails+1;
   const tx=grpNotesText(r.notes||[]);if(tx){msg=tx;GRP.needRender=true}
@@ -2910,6 +2928,12 @@ async function grpRound(){
   grpRenderSoon();
   if(st==='quitada'||st==='sin_acceso'||st==='epoca'){clearTimeout(GRP.t);return}   // no hay nada que reintentar: hace falta una invitación nueva
   grpNext();
+}
+// Antes de una acción automática se pasa lo pendiente (así lo manual y lo automático viajan por separado); si no hay conexión, sigue igual
+async function grpFlush(){
+  if(!GRP.on)return;
+  for(let i=0;i<40&&GRP.busy;i++)await new Promise(x=>setTimeout(x,250));
+  try{await grpRound()}catch(e){}
 }
 document.addEventListener('visibilitychange',()=>{if(GRP.on&&!document.hidden){GRP.fails=0;grpSoon(500)}});
 window.addEventListener('focus',()=>{if(GRP.on){GRP.fails=0;grpSoon(500)}});
@@ -2922,7 +2946,22 @@ async function grpBoot(){
   render();grpSoon(800);
 }
 function grpStop(){GRP.on=false;clearTimeout(GRP.t);GRP.cl=null}
-async function grpJoin(text){
+// La primera persona: crea el grupo nuevo en el buzón (lo hace el motor) y entra como administradora
+async function grpCreate(){
+  let g0;try{g0=await api('GET','grupo')}catch(e){return 'No pude hablar con el programa. Probá de nuevo.'}
+  if(g0.ok&&g0.data.grupo)return 'Esta computadora ya está en un grupo.';
+  if(g0.ok&&!g0.data.puede_crear)return 'Este programa no está preparado para crear grupos. Avisale a quien te lo instaló.';
+  if(!confirm('Vas a crear un grupo nuevo con el calendario que tenés ahora en esta computadora.\n\nSi tocás «Aceptar»: tu calendario pasa a ser el del grupo y se sube (cifrado) para que las demás personas lo reciban. Después las invitás por WhatsApp, una por una.\nSi tocás «Cancelar»: no cambia nada.'))return 'Cancelado: no se cambió nada.';
+  let r;try{r=await api('POST','grupo/crear',{})}catch(e){return 'No pude hablar con el programa. Probá de nuevo.'}
+  if(!r.ok)return (r.data&&r.data.error)||'No pude crear el grupo. Probá de nuevo.';
+  if(!r.data.ok)return 'No pude conectar con el buzón. Revisá que esta computadora tenga internet y probá de nuevo.';
+  return await grpJoin('GRD1.'+b64uE(JSON.stringify({g:r.data.g,c:r.data.c,f:1})),true);
+}
+// Mensaje listo para mandar por WhatsApp con la invitación adentro
+function grpInviteMessage(){
+  return 'Hola, te invito a trabajar en grupo en el calendario de guardias.\n\n1) Tenés que tener el programa en la versión 1.1 o más nueva.\n2) Abrilo y andá a «Administración» → «Grupo».\n3) Pegá todo este mensaje en el cuadro y tocá «Unirme al grupo».\n\n(La invitación vale 48 horas y se usa una sola vez.)\n\n'+GRP.invite;
+}
+async function grpJoin(text,yaConfirmado){
   const m=/GRD1\.([A-Za-z0-9_-]+)/.exec(String(text||'').replace(/\s+/g,''));   // WhatsApp puede meter saltos de línea o espacios
   const malo='Ese código no parece correcto. Copiá todo el mensaje que te mandaron, empezando por GRD1.';
   if(!m)return malo;
@@ -2933,9 +2972,7 @@ async function grpJoin(text){
   let g0;try{g0=await api('GET','grupo')}catch(e){return 'No pude hablar con el programa. Probá de nuevo.'}
   if(g0.ok&&!g0.data.buzon)return 'Esta versión del programa no trae la dirección del buzón del grupo. Avisale a quien te lo instaló.';
   if(g0.ok&&g0.data.grupo)return 'Esta computadora ya está en un grupo. Primero salí de ese grupo si querés unirte a otro.';
-  let sh;try{sh=await api('GET','share')}catch(e){sh=null}
-  if(sh&&sh.ok&&sh.data.enabled)return 'Esta computadora está compartida por red («Compartir con otras personas»). El grupo y esa opción no se usan a la vez: primero tocá «Dejar de compartir».';
-  const ok=confirm(first
+  const ok=yaConfirmado||confirm(first
     ?'Vas a crear el grupo con el calendario que tenés ahora en esta computadora.\n\nSi tocás «Aceptar»: tu calendario pasa a ser el del grupo y se va a subir (cifrado) para que las demás personas lo reciban.\nSi tocás «Cancelar»: no cambia nada.'
     :'Vas a unirte a un grupo.\n\nSi tocás «Aceptar»: el calendario de esta computadora se reemplaza por el del grupo. Lo que tenés ahora queda guardado en una copia de seguridad (podés recuperarlo si salís del grupo).\nSi tocás «Cancelar»: no cambia nada.');
   if(!ok)return 'Cancelado: no se cambió nada.';
@@ -3017,18 +3054,22 @@ function grpCardHtml(){
   if(!GRP.on&&GRP.pending){
     h+='<div class="note">Entraste al grupo, pero falta terminar de guardarlo en esta computadora.</div><div class="row"><button class="pri" data-act="srv-grp-retry">Reintentar</button></div>';
   }else if(!GRP.on){
-    h+='<div class="note">Para que varias personas trabajen en el <b>mismo calendario desde sus casas</b>, cada una con su computadora. Cada persona recibe por WhatsApp un código de invitación y lo pega acá <b>una sola vez</b>. Después todo se pasa solo, y si alguien se queda sin internet, se pone al día cuando vuelve.</div>'
-     +'<label style="display:block;margin-top:10px">Pegá acá el código que te mandaron<textarea data-srv="grp-code" rows="3" style="width:100%;font-family:monospace" placeholder="GRD1.…">'+esc(GRP.draft)+'</textarea></label>'
-     +'<div class="row"><button class="pri" data-act="srv-grp-join">Unirme al grupo</button></div>'
-     +'<div class="note">Antes de unirte te voy a explicar qué va a pasar con el calendario de esta computadora, y vas a poder cancelar.</div>';
+    h+='<div class="note">Para que varias personas trabajen en el <b>mismo calendario desde sus casas</b>, cada una con su computadora. Se pasan los cambios solas, y si alguien se queda sin internet, se pone al día cuando vuelve.</div>'
+     +'<h4 style="margin:14px 0 4px">1. Soy la primera: quiero crear el grupo</h4>'
+     +'<div class="note">Tu calendario de ahora pasa a ser el del grupo. Después invitás a las demás por WhatsApp.</div>'
+     +'<div class="row"><button class="pri" data-act="srv-grp-create">Crear el grupo</button></div>'
+     +'<h4 style="margin:18px 0 4px">2. Me invitaron: tengo un mensaje con un código</h4>'
+     +'<label style="display:block">Pegá acá el mensaje (o solo el código) que te mandaron<textarea data-srv="grp-code" rows="3" style="width:100%;font-family:monospace" placeholder="GRD1.…">'+esc(GRP.draft)+'</textarea></label>'
+     +'<div class="row"><button data-act="srv-grp-join">Unirme al grupo</button></div>'
+     +'<div class="note">Antes de hacer cualquiera de las dos cosas te explico qué va a pasar con el calendario de esta computadora, y vas a poder cancelar.</div>';
   }else{
     const s=GRP_TXT[GRP.st]||GRP_TXT.idle,owner=GRP.cl&&GRP.cl.role==='owner';
     h+='<div class="shareok"><span class="pill '+(s[1]==='ok'?'ok':s[1]==='bad'?'bad':'neu')+'">'+esc(s[0])+'</span> '+esc(GRP_LARGO[GRP.st]||'')+'</div>'
      +'<div class="note" style="margin-top:6px">Esta computadora '+(owner?'<b>administra</b> el grupo.':'está en el grupo.')+(GRP.last?' Última vez al día: <b>'+esc(grpAgo(GRP.last))+'</b>.':'')+'</div>';
     if(owner){
       h+='<div class="row"><button class="pri" data-act="srv-grp-invite">Invitar a una persona</button></div>'
-       +(GRP.invite?'<div class="sharelink"><input readonly id="grpinv" value="'+esc(GRP.invite)+'" onclick="this.select()"><button class="pri" data-act="srv-grp-copy">Copiar invitación</button></div>'
-         +'<div class="note">Mandásela por WhatsApp. <b>Vale 48 horas y se usa una sola vez.</b> Quien la reciba va a poder ver y editar el calendario completo: mandásela solo a quien corresponda.</div>':'')
+       +(GRP.invite?'<div class="sharelink"><textarea readonly id="grpinv" rows="5" style="width:100%" onclick="this.select()">'+esc(grpInviteMessage())+'</textarea></div><div class="row"><button class="pri" data-act="srv-grp-copy">Copiar mensaje para WhatsApp</button></div>'
+         +'<div class="note">Pegalo en un chat de WhatsApp con esa persona. <b>La invitación vale 48 horas y se usa una sola vez.</b> Quien la reciba va a poder ver y editar el calendario completo: mandásela solo a quien corresponda.</div>':'')
        +'<div class="note">El grupo admite hasta 5 personas (con vos).</div>';
       if(GRP.members===null||GRP.members===undefined)grpLoadMembers();
       h+='<h4 style="margin:14px 0 6px">Personas del grupo</h4>';
