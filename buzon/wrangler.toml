@@ -1,0 +1,10 @@
+name = "buzon-guardias"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+# La base se crea con:  npx wrangler d1 create buzon-guardias
+# y el database_id que devuelve se pega acá (ver GUIA-CLOUDFLARE.md).
+[[d1_databases]]
+binding = "DB"
+database_name = "buzon-guardias"
+database_id = "PEGAR-ACA-EL-ID"
