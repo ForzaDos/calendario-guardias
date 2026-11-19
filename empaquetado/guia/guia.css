@@ -1,0 +1,31 @@
+@page{size:A4;margin:13mm 14mm}
+*{box-sizing:border-box}
+body{margin:0;font:11pt/1.45 "Segoe UI",system-ui,Arial,sans-serif;color:#14202c;background:#fff}
+h1{font-size:23pt;margin:0 0 2mm;color:#16407f;letter-spacing:-.3px}
+h2{font-size:14.5pt;margin:0 0 3mm;color:#16407f;border-bottom:2px solid #c9d6ec;padding-bottom:1.5mm}
+h3{font-size:12pt;margin:3mm 0 1.5mm}
+.sub{color:#46546a;font-size:11.5pt;margin:0 0 5mm}
+.head{display:flex;align-items:center;gap:4mm;margin-bottom:5mm}
+.logo{width:13mm;height:13mm;border-radius:3mm;background:#1650b8;color:#fff;display:grid;place-items:center;font-size:19pt;font-weight:700}
+section{margin:0 0 5mm}
+h2{break-after:avoid}
+img.shot,.warn,.tip,.ok,table.t tr,.contact{break-inside:avoid}
+.pagebreak{break-after:page}
+ol.steps{list-style:none;margin:0;padding:0;counter-reset:s}
+ol.steps>li{counter-increment:s;position:relative;padding:1.2mm 0 1.2mm 11mm;margin:0 0 1mm}
+ol.steps>li::before{content:counter(s);position:absolute;left:0;top:1mm;width:7.5mm;height:7.5mm;border-radius:50%;background:#1650b8;color:#fff;font-weight:700;text-align:center;line-height:7.5mm;font-size:11pt}
+.warn,.ok,.tip{border-radius:3mm;padding:2.5mm 4mm;margin:2.5mm 0;font-size:11pt}
+.warn{background:#fff4e0;border:1px solid #e3b25a}
+.ok{background:#e7f5ee;border:1px solid #7cc4a0}
+.tip{background:#e8effa;border:1px solid #a9c0ea}
+img.shot{width:100%;border:1px solid #9aa8bb;border-radius:2.5mm;margin:2.5mm 0 1mm;display:block}
+img.shot.half{width:82%;margin-left:auto;margin-right:auto}
+.cap{font-size:9.5pt;color:#46546a;margin:0 0 3mm;text-align:center}
+b.k{background:#eef2f8;border:1px solid #b9c5d6;border-radius:1.5mm;padding:0 1.6mm;font-weight:600;white-space:nowrap}
+table.t{border-collapse:collapse;width:100%;font-size:10.5pt;margin:2mm 0}
+table.t td,table.t th{border:1px solid #b9c5d6;padding:1.5mm 2.5mm;text-align:left;vertical-align:top}
+table.t th{background:#eef2f8}
+.contact{border:2px dashed #7b8aa0;border-radius:3mm;padding:3mm 4mm;margin-top:4mm}
+.foot{color:#5b697c;font-size:9pt;margin-top:6mm;border-top:1px solid #c9d6ec;padding-top:2mm}
+ul{margin:1mm 0 1mm 5mm;padding:0}
+li{margin:.6mm 0}

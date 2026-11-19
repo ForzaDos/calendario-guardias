@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Instalador MSI del Calendario de guardias: instalación POR USUARIO,
+     sin permisos de administrador, en %LOCALAPPDATA%\Programs\CalendarioGuardias.
+     Los datos (motor\datos) NO forman parte del paquete: se crean después de
+     instalar y el desinstalador no los toca. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <?ifndef AppVersion?><?define AppVersion="1.0.0"?><?endif?>
+
+  <Package Name="Calendario de guardias"
+           Manufacturer="Sanatorio"
+           Version="$(AppVersion)"
+           UpgradeCode="8f2b6f0e-6a1d-4a4e-9a2c-1f6d3c5b7e21"
+           Scope="perUser"
+           Compressed="yes"
+           Language="3082"
+           Codepage="1252">
+
+    <SummaryInformation Description="Calendario de guardias" />
+
+    <!-- Instalación por usuario explícita: sin UAC, ARP en HKCU -->
+    <Property Id="ALLUSERS" Value="2" />
+    <Property Id="MSIINSTALLPERUSER" Value="1" />
+
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="Ya hay una versión más nueva instalada. Desinstalala antes de instalar esta." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="IconoApp" SourceFile="$(sys.SOURCEFILEDIR)..\icono.ico" />
+    <Property Id="ARPPRODUCTICON" Value="IconoApp" />
+    <Property Id="ARPCOMMENTS" Value="Calendario de guardias del sanatorio" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <!-- Que el programa aparezca también si se instala con doble clic, sin consola -->
+    <Property Id="MSIFASTINSTALL" Value="7" />
+
+    <Feature Id="Completo" Title="Calendario de guardias" Level="1" AllowAbsent="no">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentGroupRef Id="MotorFiles" />
+      <ComponentGroupRef Id="GuiasFiles" />
+      <ComponentGroupRef Id="Accesos" />
+    </Feature>
+
+
+    <!-- Al terminar la instalación (con ventana de instalador, no en silencio) abre el programa, que avisa que quedó instalado -->
+    <CustomAction Id="AbrirDespuesDeInstalar" Directory="INSTALLFOLDER"
+                  ExeCommand="&quot;[INSTALLFOLDER]app\CalendarioGuardias.exe&quot; --instalado"
+                  Execute="immediate" Impersonate="yes" Return="asyncNoWait" />
+    <CustomAction Id="QuitarAccesoEscritorio" Directory="TARGETDIR"
+                  ExeCommand="powershell.exe -NoProfile -WindowStyle Hidden -Command &quot;Remove-Item ([Environment]::GetFolderPath('Desktop') + '\Calendario de guardias.lnk') -ErrorAction SilentlyContinue&quot;"
+                  Execute="immediate" Impersonate="yes" Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="QuitarAccesoEscritorio" Before="InstallValidate" Condition="REMOVE=&quot;ALL&quot;" />
+      <Custom Action="AbrirDespuesDeInstalar" After="InstallFinalize" Condition="NOT REMOVE AND UILevel &gt; 2" />
+    </InstallExecuteSequence>
+  </Package>
+
+  <Fragment>
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="CalendarioGuardias">
+          <Directory Id="AppFolder" Name="app" />
+          <Directory Id="MotorFolder" Name="motor" />
+          <Directory Id="GuiasFolder" Name="guias" />
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="MenuFolder" Name="Calendario de guardias" />
+    </StandardDirectory>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="AppFiles" Directory="AppFolder">
+      <Files Include="..\dist\app\**" />
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="MotorFiles" Directory="MotorFolder">
+      <Files Include="..\dist\motor\**" />
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="GuiasFiles" Directory="GuiasFolder">
+      <Files Include="..\dist\guias\**" />
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="Accesos">
+      <Component Id="AccesoGuiaUso" Directory="INSTALLFOLDER" Guid="*">
+        <Shortcut Id="AccesoGuiaUsoLnk" Directory="MenuFolder" Name="Guía de uso"
+                  Description="Cómo usar el calendario de guardias" Target="[GuiasFolder]guia-uso.pdf" />
+        <RegistryValue Root="HKCU" Key="Software\CalendarioGuardias" Name="acceso_guia_uso" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+      <Component Id="AccesoGuiaInstalacion" Directory="INSTALLFOLDER" Guid="*">
+        <Shortcut Id="AccesoGuiaInstalacionLnk" Directory="MenuFolder" Name="Guía de instalación"
+                  Description="Cómo instalar y actualizar el calendario de guardias" Target="[GuiasFolder]guia-instalacion.pdf" />
+        <RegistryValue Root="HKCU" Key="Software\CalendarioGuardias" Name="acceso_guia_instalacion" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+      <Component Id="AccesoMenu" Directory="INSTALLFOLDER" Guid="*">
+        <Shortcut Id="AccesoMenuLnk"
+                  Directory="MenuFolder"
+                  Name="Calendario de guardias"
+                  Description="Calendario de guardias del sanatorio"
+                  Target="[INSTALLFOLDER]app\CalendarioGuardias.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="IconoApp" />
+        <RemoveFolder Id="QuitarMenuFolder" Directory="MenuFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\CalendarioGuardias" Name="acceso_menu"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+</Wix>
